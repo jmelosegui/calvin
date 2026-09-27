@@ -164,6 +164,8 @@ pub fn run_foreground(cfg: &Config) -> Result<()> {
         let (listener, port) = bind().await?;
         let token = random_token()?;
         let st = Arc::new(AppState::new(
+            data_dir.clone(),
+            crate::update::enabled(cfg.updates.check),
             db_path,
             cfg.claude_dir()?,
             cfg.extra_skill_paths(),
@@ -248,8 +250,10 @@ pub fn stop() -> Result<()> {
     let asked =
         http(state.port, "POST", "/api/shutdown", Some(&state.token)).map(|(code, _)| code == 202);
     let deadline = Instant::now() + STOP_TIMEOUT;
+    // Wait for the process itself to exit, not just the server: until it does, Windows
+    // keeps the executable locked and an installer can't replace it.
     while Instant::now() < deadline {
-        if !healthy(state.port) {
+        if !healthy(state.port) && !process_alive(state.pid) {
             let _ = fs::remove_file(state_path()?);
             println!("calvin stopped.");
             return Ok(());
@@ -270,6 +274,24 @@ pub fn stop() -> Result<()> {
         ),
     }
     Ok(())
+}
+
+fn process_alive(pid: u32) -> bool {
+    let pid = pid.to_string();
+    if cfg!(windows) {
+        Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains(&format!("\"{pid}\"")))
+            .unwrap_or(false)
+    } else {
+        Command::new("kill")
+            .args(["-0", &pid])
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
 }
 
 fn kill(pid: u32) -> Result<()> {
@@ -317,6 +339,14 @@ pub fn status() -> Result<()> {
         }
     }
     println!("  log        {}", log_path()?.display());
+    if let Some(u) = crate::update::available(&config::data_dir()?) {
+        println!();
+        println!(
+            "A new version is available: calvin {} (you have {}).",
+            u.latest, u.current
+        );
+        println!("  {}", u.url);
+    }
     Ok(())
 }
 

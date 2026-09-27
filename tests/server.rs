@@ -19,6 +19,8 @@ fn app() -> (tempfile::TempDir, axum::Router) {
     let mut conn = db::open(&db_path).unwrap();
     ingest_claude_code(&mut conn, &claude, &PriceTable::bundled(), &mut Quiet).unwrap();
     let state = AppState::new(
+        tmp.path().to_path_buf(),
+        false,
         db_path,
         claude,
         vec![],

@@ -13,6 +13,33 @@ pub fn run(cfg: &Config, conn: &Connection) -> Result<()> {
         println!("              {:.1} MB", meta.len() as f64 / 1e6);
     }
     println!("Config file   {}", config::config_file()?.display());
+    let data_dir = config::data_dir()?;
+    if crate::update::enabled(cfg.updates.check) {
+        match crate::update::read_cache(&data_dir) {
+            Some(c) => {
+                let latest = c.latest.as_deref().unwrap_or("unknown");
+                let when = c.checked_at.format("%Y-%m-%d %H:%M UTC");
+                println!(
+                    "Updates       calvin {} · latest release {latest} (checked {when})",
+                    crate::update::current_version()
+                );
+                if let Some(e) = c.error {
+                    println!("              last check failed: {e}");
+                }
+            }
+            None => {
+                println!("Updates       checked daily while calvin is running (not checked yet)")
+            }
+        }
+        if let Some(u) = crate::update::available(&data_dir) {
+            println!(
+                "              → calvin {} is available: {}",
+                u.latest, u.url
+            );
+        }
+    } else {
+        println!("Updates       checks are off");
+    }
     println!();
 
     let projects = claude.join("projects");

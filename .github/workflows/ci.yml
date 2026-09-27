@@ -31,6 +31,7 @@ jobs:
         shell: bash
         env:
           CALVIN_DATA_DIR: ${{ runner.temp }}/calvin-data
+          CALVIN_NO_UPDATE_CHECK: "1"
           CLAUDE_CONFIG_DIR: ${{ github.workspace }}/tests/fixtures/claude-code
         run: |
           cargo build

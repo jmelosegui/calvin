@@ -22,27 +22,33 @@ loads them into a local SQLite database, and shows you:
 Your session logs contain prompts, source code and often confidential details. calvin:
 
 - never sends data anywhere: no telemetry, no accounts, no cloud
+- makes one network call: while running, it asks GitHub once a day whether a newer release
+  exists, so it can tell you. That request carries nothing about you or your usage. Turn it
+  off with `[updates] check = false` in `config.toml`
 - never writes to your harness folders or skill folders
 - serves its dashboard on `127.0.0.1` only
 
 ## Install
 
-From source, for now (needs Rust 1.95+):
-
-```sh
-cargo install --git https://github.com/jmelosegui/calvin
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/jmelosegui/calvin/main/docs/install.ps1 | iex
 ```
-
-Planned, once there are releases:
 
 ```sh
 # macOS / Linux
-curl -LsSf https://github.com/<owner>/calvin/releases/latest/download/calvin-installer.sh | sh
+curl -fsSL https://raw.githubusercontent.com/jmelosegui/calvin/main/docs/install.sh | sh
+```
 
-# Windows (PowerShell)
-irm https://github.com/<owner>/calvin/releases/latest/download/calvin-installer.ps1 | iex
+The scripts download the latest release for your platform, verify its checksum, and put
+`calvin` in `%LOCALAPPDATA%\calvinin` (Windows) or `~/.local/bin` (macOS, Linux). Run them
+again to update; a running calvin is stopped and restarted for you.
 
-# Rust users
+Prebuilt for Windows x64, Linux x64/arm64 (static) and macOS x64/arm64. Anything else, or
+from source (Rust 1.95+):
+
+```sh
+cargo install --git https://github.com/jmelosegui/calvin
 ```
 
 There are no other dependencies. The dashboard, its fonts and SQLite are all built into the

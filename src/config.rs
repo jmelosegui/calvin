@@ -20,6 +20,20 @@ pub struct Config {
     pub paths: PathsConfig,
     pub prices: PricesConfig,
     pub skills: SkillsConfig,
+    pub updates: UpdatesConfig,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+pub struct UpdatesConfig {
+    /// Once a day, ask GitHub whether a newer calvin exists. Sends no usage data.
+    pub check: bool,
+}
+
+impl Default for UpdatesConfig {
+    fn default() -> Self {
+        Self { check: true }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]

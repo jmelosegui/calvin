@@ -1,0 +1,159 @@
+name: Release
+
+# Push a tag like v0.2.0 to build every platform, publish a GitHub Release, and check
+# that the install scripts work with what was published.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check-version:
+    name: Tag matches Cargo.toml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The update check compares release tags with the version built into the binary,
+      # so they must agree.
+      - name: Compare
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          crate=$(grep -m1 '^version = ' Cargo.toml | cut -d '"' -f2)
+          if [ "$tag" != "$crate" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $crate"
+            exit 1
+          fi
+
+  build:
+    name: Build ${{ matrix.asset }}
+    needs: check-version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: windows-latest,   target: x86_64-pc-windows-msvc,     asset: calvin-windows-amd64, archive: zip }
+          - { os: ubuntu-latest,    target: x86_64-unknown-linux-musl,  asset: calvin-linux-amd64,   archive: tar.gz }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, asset: calvin-linux-arm64,   archive: tar.gz }
+          - { os: macos-latest,     target: aarch64-apple-darwin,       asset: calvin-macos-arm64,   archive: tar.gz }
+          - { os: macos-latest,     target: x86_64-apple-darwin,        asset: calvin-macos-amd64,   archive: tar.gz }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # Static Linux binaries run on any distribution.
+      - name: Install musl tools
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Smoke test
+        # The x86_64 macOS binary is cross-compiled on an ARM runner; skip running it.
+        if: matrix.target != 'x86_64-apple-darwin'
+        shell: bash
+        run: |
+          bin=target/${{ matrix.target }}/release/calvin
+          "$bin" --version
+          "$bin" --version | grep -q "${GITHUB_REF_NAME#v}"
+
+      - name: Package (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $staging = "${{ matrix.asset }}"
+          New-Item -ItemType Directory -Force -Path $staging | Out-Null
+          Copy-Item "target\${{ matrix.target }}\release\calvin.exe" "$staging\calvin.exe"
+          Copy-Item LICENSE, README.md $staging
+          Compress-Archive -Path "$staging\*" -DestinationPath "$staging.zip"
+
+      - name: Package (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          staging="${{ matrix.asset }}"
+          mkdir -p "$staging"
+          cp "target/${{ matrix.target }}/release/calvin" "$staging/"
+          cp LICENSE README.md "$staging/"
+          tar -czf "$staging.tar.gz" -C "$staging" .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}.${{ matrix.archive }}
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    # Only publish once the installers have worked with these exact archives.
+    needs: [build, verify-install]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: calvin-*
+          merge-multiple: true
+
+      - name: Checksums
+        run: sha256sum calvin-* | tee SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            calvin-*
+            SHA256SUMS
+
+  verify-install:
+    name: Install script (${{ matrix.os }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, asset: calvin-windows-amd64.zip }
+          - { os: ubuntu-latest,  asset: calvin-linux-amd64.tar.gz }
+          - { os: macos-latest,   asset: calvin-macos-arm64.tar.gz }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: calvin-*
+          merge-multiple: true
+          path: dist
+
+      # Run the real installer against the archive this workflow just built (the
+      # download step is skipped, everything after it runs as it would for users).
+      - name: Install (PowerShell)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CALVIN_INSTALL_ARCHIVE: ${{ github.workspace }}\dist\${{ matrix.asset }}
+          CALVIN_INSTALL_DIR: ${{ runner.temp }}\calvin-bin
+        run: |
+          ./docs/install.ps1
+          & "$env:CALVIN_INSTALL_DIR\calvin.exe" --version
+
+      - name: Install (sh)
+        if: runner.os != 'Windows'
+        env:
+          CALVIN_INSTALL_ARCHIVE: ${{ github.workspace }}/dist/${{ matrix.asset }}
+          CALVIN_INSTALL_DIR: ${{ runner.temp }}/calvin-bin
+        run: |
+          sh docs/install.sh
+          "$CALVIN_INSTALL_DIR/calvin" --version

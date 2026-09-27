@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
 use crate::insights::{self, CostBy, Since};
-use crate::{db, ingest, prices::PriceTable, skills};
+use crate::{db, ingest, prices::PriceTable, skills, update};
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
 const LOGO_SVG: &str = include_str!("../assets/logo.svg");
@@ -40,8 +40,12 @@ const FONTS: &[(&str, &[u8])] = &[
     ),
 ];
 const SYNC_INTERVAL: Duration = Duration::from_secs(3);
+/// How often to see whether the daily update check is due.
+const UPDATE_POLL: Duration = Duration::from_secs(60 * 60);
 
 pub struct AppState {
+    pub data_dir: PathBuf,
+    pub check_updates: bool,
     pub db_path: PathBuf,
     pub claude_dir: PathBuf,
     pub extra_skill_paths: Vec<PathBuf>,
@@ -61,7 +65,10 @@ struct SyncInfo {
 }
 
 impl AppState {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
+        data_dir: PathBuf,
+        check_updates: bool,
         db_path: PathBuf,
         claude_dir: PathBuf,
         extra_skill_paths: Vec<PathBuf>,
@@ -70,6 +77,8 @@ impl AppState {
         port: u16,
     ) -> Self {
         Self {
+            data_dir,
+            check_updates,
             db_path,
             claude_dir,
             extra_skill_paths,
@@ -196,6 +205,26 @@ async fn font(axum::extract::Path(name): axum::extract::Path<String>) -> Respons
     }
 }
 
+/// Keep the cached update check fresh (the check itself runs at most once a day).
+pub async fn update_loop(st: Arc<AppState>) {
+    if !st.check_updates {
+        return;
+    }
+    loop {
+        let dir = st.data_dir.clone();
+        if let Ok(Ok(result)) =
+            tokio::task::spawn_blocking(move || update::check_if_due(&dir)).await
+            && let Some(e) = result.error
+        {
+            eprintln!("update check failed: {e}");
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(UPDATE_POLL) => {}
+            _ = st.stopped() => return,
+        }
+    }
+}
+
 pub struct ApiError(StatusCode, String);
 
 impl IntoResponse for ApiError {
@@ -247,6 +276,8 @@ struct Status {
     uptime_secs: u64,
     last_sync: Option<SyncInfo>,
     db_bytes: Option<u64>,
+    update_checks: bool,
+    update: Option<update::Available>,
 }
 
 async fn status(State(st): State<Arc<AppState>>) -> Json<Status> {
@@ -257,6 +288,8 @@ async fn status(State(st): State<Arc<AppState>>) -> Json<Status> {
         uptime_secs: st.started.elapsed().as_secs(),
         last_sync: st.last_sync.lock().unwrap().clone(),
         db_bytes: std::fs::metadata(&st.db_path).ok().map(|m| m.len()),
+        update_checks: st.check_updates,
+        update: update::available(&st.data_dir),
     })
 }
 
@@ -353,6 +386,7 @@ async fn live(
 pub async fn serve(listener: tokio::net::TcpListener, st: Arc<AppState>) -> Result<()> {
     let app = router(st.clone());
     tokio::spawn(sync_loop(st.clone()));
+    tokio::spawn(update_loop(st.clone()));
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
