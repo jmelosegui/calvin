@@ -124,4 +124,6 @@ prototype/logos.html       logo options that were considered
 
 ## License
 
-Dual-licensed under MIT or Apache-2.0, at your option.
+Licensed under the [MIT License](LICENSE).
+
+The bundled fonts are under the SIL Open Font License; see [web/fonts/OFL.txt](web/fonts/OFL.txt).

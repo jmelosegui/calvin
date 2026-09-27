@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+
+      # End to end: start the background process, check it answers, stop it.
+      - name: start / status / stop
+        shell: bash
+        env:
+          CALVIN_DATA_DIR: ${{ runner.temp }}/calvin-data
+          CLAUDE_CONFIG_DIR: ${{ github.workspace }}/tests/fixtures/claude-code
+        run: |
+          cargo build
+          bin=target/debug/calvin
+          $bin start --no-open
+          $bin status
+          curl -sf "http://127.0.0.1:1982/api/summary?since=all" | grep '"requests":3'
+          $bin stop
+          $bin status | grep "not running"
