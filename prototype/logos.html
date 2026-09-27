@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>calvin · logo options</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Silkscreen&display=swap"
+    rel="stylesheet"
+  />
+  <style>
+    :root {
+      --bg: #141210;
+      --line: #e9e4dc;
+      --line-dim: #3a3530;
+      --text: #f4f1ec;
+      --muted: #9d968d;
+      --orange: #ff6a1a;
+      --dot: rgba(255, 255, 255, 0.05);
+      --btn: #221f1c;
+    }
+
+    [data-theme="light"] {
+      --bg: #f6f3ee;
+      --line: #2a2622;
+      --line-dim: #d6cec4;
+      --text: #1d1a17;
+      --muted: #6b645c;
+      --orange: #e85a0c;
+      --dot: rgba(0, 0, 0, 0.07);
+      --btn: #ece6de;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      padding: 32px 28px 48px;
+      background-color: var(--bg);
+      background-image: radial-gradient(var(--dot) 1px, transparent 1.3px);
+      background-size: 18px 18px;
+      color: var(--text);
+      font-family: "Outfit", system-ui, sans-serif;
+    }
+
+    header { display: flex; align-items: center; gap: 16px; max-width: 1280px; margin: 0 auto 26px; }
+    h1 { margin: 0; font-size: 32px; font-weight: 700; letter-spacing: -0.02em; }
+    h1 .px { font-family: "Silkscreen", monospace; font-weight: 400; color: var(--orange); }
+    header p { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+    .toggle {
+      margin-left: auto;
+      padding: 10px 16px;
+      border: 0;
+      border-radius: 8px;
+      background: var(--btn);
+      color: var(--text);
+      font: 600 14px "Outfit", sans-serif;
+      cursor: pointer;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(370px, 1fr));
+      gap: 18px;
+      max-width: 1280px;
+      margin: 0 auto;
+    }
+
+    .card { padding: 22px; border: 1.5px solid var(--line); border-radius: 12px; }
+    .card .top { display: flex; align-items: baseline; gap: 10px; }
+    .letter { font-family: "Silkscreen", monospace; color: var(--orange); font-size: 18px; }
+    .card h2 { margin: 0; font-size: 18px; font-weight: 600; }
+    .card .why { margin: 6px 0 18px; font-size: 13px; line-height: 1.5; color: var(--muted); min-height: 40px; }
+
+    .stage { display: flex; align-items: center; gap: 26px; }
+    .big { width: 132px; height: 132px; }
+    .sizes { display: flex; align-items: flex-end; gap: 14px; }
+    .sizes svg:nth-child(1) { width: 40px; height: 40px; }
+    .sizes svg:nth-child(2) { width: 24px; height: 24px; }
+    .sizes svg:nth-child(3) { width: 16px; height: 16px; }
+
+    .wordmark {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px dashed var(--line-dim);
+    }
+    .wordmark svg { width: 30px; height: 30px; }
+    .wordmark span { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; }
+
+    /* shared logo styles */
+    .ln { fill: none; stroke: var(--line); stroke-width: 3.5; stroke-linecap: round; stroke-linejoin: round; }
+    .or { fill: var(--orange); }
+    .ors { fill: none; stroke: var(--orange); stroke-width: 3.5; stroke-linecap: round; stroke-linejoin: round; }
+    .bgf { fill: var(--bg); }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Pick a logo for <span class="px">CALVIN</span></h1>
+      <p>Each shown large, at icon sizes (40, 24, 16 px) and next to the name. The 16 px one is roughly a browser tab.</p>
+    </div>
+    <button class="toggle" id="theme">Light / dark</button>
+  </header>
+
+  <div class="grid" id="grid"></div>
+
+  <!-- Logo definitions, reused at every size -->
+  <svg width="0" height="0" style="position:absolute">
+    <defs>
+      <!-- A: pixel C -->
+      <g id="logo-a"></g>
+
+      <!-- B: robot eye -->
+      <g id="logo-b">
+        <line class="ln" x1="32" y1="15" x2="32" y2="8" />
+        <circle class="or" cx="32" cy="7" r="3.5" />
+        <rect class="ln" x="9" y="16" width="46" height="38" rx="11" />
+        <circle class="or" cx="32" cy="35" r="11" />
+        <circle class="bgf" cx="35.5" cy="31.5" r="3.4" />
+      </g>
+
+      <!-- C: pixel inkblot -->
+      <g id="logo-c"></g>
+
+      <!-- D: positronic brain -->
+      <g id="logo-d">
+        <circle class="ln" cx="32" cy="32" r="25" />
+        <path class="ors" d="M16 28 H27 L33 21 H43" />
+        <path class="ors" d="M16 38 H30" />
+        <path class="ors" d="M28 46 L35 39 H48" />
+        <circle class="or" cx="45.5" cy="21" r="3.5" />
+        <circle class="or" cx="32.5" cy="38" r="3.5" />
+        <circle class="or" cx="50.5" cy="39" r="3.5" />
+      </g>
+
+      <!-- E: magnifier over a bar chart -->
+      <g id="logo-e">
+        <circle class="ln" cx="27" cy="27" r="19" />
+        <line class="ors" x1="41" y1="41" x2="55" y2="55" style="stroke-width:7" />
+        <rect class="or" x="17" y="29" width="5" height="9" rx="1.2" />
+        <rect class="or" x="24.5" y="23" width="5" height="15" rx="1.2" />
+        <rect class="or" x="32" y="17" width="5" height="21" rx="1.2" />
+      </g>
+
+      <!-- F: speech bubble with robot eyes -->
+      <g id="logo-f">
+        <path class="ln" d="M17 9 H47 A11 11 0 0 1 58 20 V35 A11 11 0 0 1 47 46 H29 L15 56 L18 46 H17 A11 11 0 0 1 6 35 V20 A11 11 0 0 1 17 9 Z" />
+        <rect class="or" x="19" y="21" width="9" height="12" rx="1.5" />
+        <rect class="or" x="36" y="21" width="9" height="12" rx="1.5" />
+      </g>
+    </defs>
+  </svg>
+
+  <script>
+    const NS = "http://www.w3.org/2000/svg";
+
+    // Pixel artwork: build squares from a text grid.
+    function pixels(id, rows, cell, ox, oy) {
+      const g = document.getElementById(id);
+      rows.forEach((row, y) =>
+        [...row].forEach((c, x) => {
+          if (c !== "X") return;
+          const r = document.createElementNS(NS, "rect");
+          r.setAttribute("class", "or");
+          r.setAttribute("x", ox + x * cell + 0.5);
+          r.setAttribute("y", oy + y * cell + 0.5);
+          r.setAttribute("width", cell - 1);
+          r.setAttribute("height", cell - 1);
+          g.append(r);
+        })
+      );
+    }
+
+    pixels("logo-a", [
+      "..XXXX.",
+      ".XX..XX",
+      "XX.....",
+      "XX.....",
+      "XX.....",
+      ".XX..XX",
+      "..XXXX.",
+    ], 8, 4, 4);
+
+    // Inkblot: left half, mirrored for symmetry.
+    const half = ["...X", ".XX.", "XXXX", ".XXX", "..XX", ".XXX", "XX.X", "...X"];
+    pixels("logo-c", half.map((h) => h + [...h].reverse().join("")), 7, 4, 4);
+
+    const LOGOS = [
+      ["a", "Pixel C", "The letter C in the same pixel font as the page titles. Simple, and still reads at 16 px."],
+      ["b", "Robot eye", "One watchful eye on a robot head. Calvin observes the robots and reports what she sees."],
+      ["c", "Inkblot", "A pixel Rorschach test, the classic psychologist's tool. A nod to Calvin as robopsychologist."],
+      ["d", "Positronic brain", "Asimov's robots think with positronic brains. Circuit traces inside a head-shaped circle."],
+      ["e", "Magnifier on data", "Inspecting the numbers. Says \"analytics\" most directly, but is the least Asimov."],
+      ["f", "Talking robot", "A robot in a speech bubble: the conversation between you and the agent, which is what calvin reads."],
+    ];
+
+    const use = (id) => `<svg viewBox="0 0 64 64"><use href="#logo-${id}"/></svg>`;
+    document.getElementById("grid").innerHTML = LOGOS.map(([id, name, why]) => `
+      <section class="card">
+        <div class="top"><span class="letter">${id.toUpperCase()}</span><h2>${name}</h2></div>
+        <p class="why">${why}</p>
+        <div class="stage">
+          <svg class="big" viewBox="0 0 64 64"><use href="#logo-${id}"/></svg>
+          <div class="sizes">${use(id)}${use(id)}${use(id)}</div>
+        </div>
+        <div class="wordmark">${use(id)}<span>calvin</span></div>
+      </section>`).join("");
+
+    document.getElementById("theme").addEventListener("click", () => {
+      const r = document.documentElement;
+      r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    });
+  </script>
+</body>
+</html>
