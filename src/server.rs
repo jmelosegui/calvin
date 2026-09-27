@@ -143,6 +143,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/skills", get(skill_usage))
         .route("/api/skills/detail", get(skill_detail))
         .route("/api/skills/pack", get(skill_pack))
+        .route("/api/skills/open", post(skill_open))
         .route("/api/prompts", get(prompts))
         .route("/api/friction", get(friction))
         .route("/api/cache", get(cache))
@@ -425,6 +426,45 @@ async fn skill_detail(
 
 /// Download a zip of the selected skills (`?names=a,b`). Only installed skills can be
 /// packed, so this can never be used to read arbitrary paths.
+/// Header the dashboard sends with requests that do something on this machine. Other
+/// websites can't add custom headers to requests to calvin (there's no CORS), so this
+/// stops a page you visit from triggering these endpoints.
+const ACTION_HEADER: &str = "x-calvin-action";
+
+/// Open a skill's folder in the system file manager.
+async fn skill_open(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(p): Query<Params>,
+) -> Response {
+    if headers.get(ACTION_HEADER).is_none() {
+        return ApiError(
+            StatusCode::FORBIDDEN,
+            format!("missing {ACTION_HEADER} header"),
+        )
+        .into_response();
+    }
+    let Some(name) = p.name.clone() else {
+        return ApiError(StatusCode::BAD_REQUEST, "missing ?name=".into()).into_response();
+    };
+    let s = st.clone();
+    let result = tokio::task::spawn_blocking(move || -> Result<()> {
+        let conn = db::open_read(&s.db_path)?;
+        let skill = installed_skills(&s, &conn)?
+            .into_iter()
+            .find(|k| k.name == name)
+            .ok_or_else(|| anyhow::anyhow!("no installed skill named '{name}'"))?;
+        open::that_detached(pack::skill_dir(&skill))?;
+        Ok(())
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Err(e)) => ApiError(StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
+        Err(e) => ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
 async fn skill_pack(State(st): State<Arc<AppState>>, Query(p): Query<Params>) -> Response {
     let names: Vec<String> = p
         .names

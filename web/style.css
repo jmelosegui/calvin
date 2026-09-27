@@ -33,6 +33,13 @@
 
 * { box-sizing: border-box; }
 
+/* Thin scrollbars in the theme's colours instead of the browser's bright defaults. */
+* { scrollbar-width: thin; scrollbar-color: var(--line-dim) transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--line-dim); border-radius: 8px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--faint); }
+
 body {
   margin: 0;
   background-color: var(--bg);

@@ -35,7 +35,15 @@
     .stats { display: flex; flex-wrap: wrap; gap: 28px; margin: 16px 0; }
     .stats div b { display: block; font-size: 24px; font-weight: 700; }
     .stats div span { font-size: 12px; color: var(--muted); }
-    .path { font: 500 12px "JetBrains Mono", monospace; color: var(--faint); overflow-wrap: anywhere; }
+    .path { display: flex; align-items: center; gap: 8px; font: 500 12px "JetBrains Mono", monospace; color: var(--faint); }
+    .path span { overflow-wrap: anywhere; }
+    .copy {
+      flex: none; display: grid; place-items: center; width: 26px; height: 26px; padding: 0;
+      border: 1px solid var(--line-dim); border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer;
+    }
+    .copy:hover { color: var(--orange); border-color: var(--orange); }
+    .copy.done { color: var(--orange); border-color: var(--orange); }
+    .copy svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
     h3 { margin: 22px 0 8px; font-size: 14px; font-weight: 600; }
 
     .files { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -48,7 +56,7 @@
     .files tr.warn .note { color: var(--orange-ink); }
 
     .md {
-      margin: 0; max-height: 420px; overflow: auto; padding: 14px 16px; border: 1.5px solid var(--line-dim); border-radius: 10px;
+      margin: 0; padding: 14px 16px; border: 1.5px solid var(--line-dim); border-radius: 10px;
       white-space: pre-wrap; font: 500 12.5px/1.6 "JetBrains Mono", monospace; color: var(--text);
     }
     .warnbox { margin: 14px 0 0; padding: 10px 14px; border: 1.5px solid var(--orange); border-radius: 8px; font-size: 13px; }
@@ -176,10 +184,11 @@
         box.innerHTML = `
           <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
             <h2 style="margin:0">${esc(d.skill.name)}</h2><span class="badge">${SOURCE[d.skill.source] ?? esc(d.skill.source)}</span>
-            <button class="btn primary" id="packone" style="margin-left:auto">Pack this skill</button>
+            <button class="btn" id="openfolder" style="margin-left:auto" title="Open in your file manager">Open folder</button>
+            <button class="btn primary" id="packone">Pack this skill</button>
           </div>
           <p class="sub" style="margin-top:8px">${esc(d.skill.description) || "No description."}</p>
-          <div class="path">${esc(p.dir)}</div>
+          <div class="path"><span>${esc(p.dir)}</span><button class="copy" id="copypath" title="Copy location" aria-label="Copy location">${COPY_ICON}</button></div>
           <div class="stats">
             <div><b>${u.model_runs}</b><span>times the model chose it</span></div>
             <div><b>${u.command_runs}</b><span>times you ran /${esc(d.skill.name)}</span></div>
@@ -194,6 +203,8 @@
           <h3>SKILL.md</h3>
           <pre class="md">${esc(d.skill_md)}${d.skill_md_truncated ? "\n\n… (preview cut off)" : ""}</pre>`;
         $("#packone").onclick = () => pack([name]);
+        $("#openfolder").onclick = () => openFolder(name);
+        $("#copypath").onclick = (e) => copyText(p.dir, e.currentTarget);
       } catch (e) {
         box.innerHTML = `<div class="empty error">${esc(e.message)}</div>`;
       }
@@ -216,6 +227,33 @@
       } catch (e) {
         $("#packinfo").innerHTML = `<span class="error">${esc(e.message)}</span>`;
       }
+    }
+
+    const COPY_ICON = `<svg viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>`;
+    const CHECK_ICON = `<svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>`;
+
+    async function copyText(text, button) {
+      try {
+        await navigator.clipboard.writeText(text);
+        button.innerHTML = CHECK_ICON;
+        button.classList.add("done");
+        button.title = "Copied";
+        setTimeout(() => {
+          button.innerHTML = COPY_ICON;
+          button.classList.remove("done");
+          button.title = "Copy location";
+        }, 1500);
+      } catch (e) {
+        prompt("Copy the location:", text);
+      }
+    }
+
+    async function openFolder(name) {
+      const r = await fetch(`/api/skills/open?name=${encodeURIComponent(name)}`, {
+        method: "POST",
+        headers: { "x-calvin-action": "1" },
+      });
+      if (!r.ok) alert(`Couldn't open the folder: ${(await r.json().catch(() => ({}))).error ?? r.status}`);
     }
 
     async function pack(names) {

@@ -136,3 +136,26 @@ async fn pack_only_accepts_installed_skill_names() {
         );
     }
 }
+
+#[tokio::test]
+async fn open_folder_needs_the_action_header() {
+    let (_tmp, app) = app();
+    let req = |header: bool| {
+        let mut r =
+            Request::post("/api/skills/open?name=anything").header("host", "127.0.0.1:1982");
+        if header {
+            r = r.header("x-calvin-action", "1");
+        }
+        r.body(Body::empty()).unwrap()
+    };
+    // A plain cross-site form post can't add the header.
+    assert_eq!(
+        app.clone().oneshot(req(false)).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+    // With it, unknown skills are still refused, so no arbitrary path is ever opened.
+    assert_eq!(
+        app.oneshot(req(true)).await.unwrap().status(),
+        StatusCode::BAD_REQUEST
+    );
+}
