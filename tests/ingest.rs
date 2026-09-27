@@ -1,0 +1,214 @@
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+use calvin::db;
+use calvin::ingest::{Quiet, ingest_claude_code};
+use calvin::insights::{self, CostBy, Since};
+use calvin::prices::PriceTable;
+use rusqlite::Connection;
+
+const SESSION: &str = "00000000-0000-4000-8000-000000000001";
+
+/// Copy the fixture into a temp dir so tests can append to it.
+fn fixture() -> (tempfile::TempDir, PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/claude-code");
+    let dst = tmp.path().join("claude");
+    copy_dir(&src, &dst);
+    (tmp, dst)
+}
+
+fn copy_dir(src: &Path, dst: &Path) {
+    fs::create_dir_all(dst).unwrap();
+    for entry in fs::read_dir(src).unwrap() {
+        let entry = entry.unwrap();
+        let target = dst.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
+fn log_file(claude: &Path) -> PathBuf {
+    claude
+        .join("projects/C--work-demo")
+        .join(format!("{SESSION}.jsonl"))
+}
+
+fn ingest(conn: &mut Connection, claude: &Path) -> calvin::ingest::Stats {
+    ingest_claude_code(conn, claude, &PriceTable::bundled(), &mut Quiet).unwrap()
+}
+
+fn count(conn: &Connection, sql: &str) -> i64 {
+    conn.query_row(sql, [], |r| r.get(0)).unwrap()
+}
+
+#[test]
+fn imports_the_fixture() {
+    let (_tmp, claude) = fixture();
+    let mut conn = db::open_in_memory().unwrap();
+    let stats = ingest(&mut conn, &claude);
+    assert_eq!(stats.files_read, 1);
+    assert_eq!(stats.lines, 18);
+    assert_eq!(stats.bad_lines, 1);
+
+    // Session metadata.
+    let (project, title, branch): (String, String, String) = conn
+        .query_row(
+            "SELECT project, title, git_branch FROM sessions WHERE id = ?1",
+            [SESSION],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (project.as_str(), title.as_str(), branch.as_str()),
+        ("demo", "Fix failing tests", "main")
+    );
+
+    // Prompts: meta records, tool results, reminders and the interrupt marker are not prompts.
+    assert_eq!(
+        count(&conn, "SELECT COUNT(*) FROM prompts WHERE kind = 'prompt'"),
+        4
+    );
+    let command: String = conn
+        .query_row("SELECT text FROM prompts WHERE kind = 'command'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(command, "/shipit commit staged");
+
+    // One response split over two log lines counts once; <synthetic> is not a request.
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM requests"), 3);
+    let (output, read): (i64, i64) = conn
+        .query_row(
+            "SELECT output_tokens, cache_read FROM requests WHERE request_id = 'req_1'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((output, read), (100, 1000));
+
+    // opus-5 req_1: 10×5 + 100×25 + 1000×0.5 + 200×6.25 = 4300
+    // haiku req_2:  5×1 + 50×5 + 100×1.25 (legacy total priced as 5m write) = 380
+    // opus-5 req_4: 1×5 + 1×25 = 30
+    let cost: f64 = conn
+        .query_row("SELECT SUM(cost_usd) FROM requests", [], |r| r.get(0))
+        .unwrap();
+    assert!((cost - 4710.0 / 1e6).abs() < 1e-12, "cost was {cost}");
+
+    // Tool outcomes and friction.
+    let outcomes: Vec<(String, String)> = conn
+        .prepare("SELECT id, outcome FROM tool_calls ORDER BY id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(
+        outcomes,
+        vec![
+            ("tool_1".into(), "ok".into()),
+            ("tool_2".into(), "rejected".into()),
+            ("tool_3".into(), "denied".into())
+        ]
+    );
+    let friction: Vec<(String, Option<String>)> = conn
+        .prepare("SELECT kind, tool FROM friction ORDER BY kind")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(
+        friction,
+        vec![
+            ("denied".into(), Some("Bash".into())),
+            ("interrupted".into(), None),
+            ("rejected".into(), Some("Skill".into()))
+        ]
+    );
+
+    // Raw copy: every valid line kept, image data stripped.
+    let (lines, zdata): (i64, Vec<u8>) = conn
+        .query_row("SELECT lines, zdata FROM raw_chunks", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    assert_eq!(lines, 17);
+    let raw = String::from_utf8(zstd::decode_all(&zdata[..]).unwrap()).unwrap();
+    assert!(!raw.contains("iVBORw0KGgo"));
+    assert!(raw.contains("<stripped by calvin>"));
+}
+
+#[test]
+fn insights_over_the_fixture() {
+    let (_tmp, claude) = fixture();
+    let mut conn = db::open_in_memory().unwrap();
+    ingest(&mut conn, &claude);
+    let all = Since::all();
+
+    let s = insights::summary(&conn, &all).unwrap();
+    assert_eq!(
+        (s.sessions, s.prompts, s.commands, s.requests),
+        (1, 4, 1, 3)
+    );
+
+    let skills = insights::skills(&conn, &all).unwrap();
+    assert_eq!(skills.len(), 1);
+    assert_eq!((skills[0].skill.as_str(), skills[0].runs), ("shipit", 1));
+
+    let repeated = insights::repeated_prompts(&conn, &all, 3).unwrap();
+    assert_eq!(repeated.len(), 1);
+    assert_eq!(repeated[0].count, 3);
+
+    let by_model = insights::cost(&conn, &all, CostBy::Model).unwrap();
+    assert_eq!(by_model[0].key, "claude-opus-5");
+
+    let commands = insights::commands(&conn, &all).unwrap();
+    assert_eq!(
+        (commands[0].command.as_str(), commands[0].uses),
+        ("/shipit", 1)
+    );
+
+    // Nothing after the fixture's date.
+    let later = Since::parse("2030-01-01").unwrap();
+    assert_eq!(insights::summary(&conn, &later).unwrap().requests, 0);
+}
+
+#[test]
+fn reingest_reads_only_new_complete_lines() {
+    let (_tmp, claude) = fixture();
+    let mut conn = db::open_in_memory().unwrap();
+    ingest(&mut conn, &claude);
+
+    let again = ingest(&mut conn, &claude);
+    assert_eq!((again.files_read, again.lines), (0, 0));
+
+    // A line still being written (no trailing newline) is left for next time.
+    let mut f = OpenOptions::new()
+        .append(true)
+        .open(log_file(&claude))
+        .unwrap();
+    let line = format!(
+        r#"{{"type":"user","sessionId":"{SESSION}","uuid":"u99","timestamp":"2026-09-01T11:00:00.000Z","message":{{"role":"user","content":"one more thing"}}}}"#
+    );
+    write!(f, "{line}").unwrap();
+    f.flush().unwrap();
+    assert_eq!(ingest(&mut conn, &claude).lines, 0);
+    assert_eq!(
+        count(&conn, "SELECT COUNT(*) FROM prompts WHERE id = 'u99'"),
+        0
+    );
+
+    writeln!(f).unwrap();
+    f.flush().unwrap();
+    assert_eq!(ingest(&mut conn, &claude).lines, 1);
+    assert_eq!(
+        count(&conn, "SELECT COUNT(*) FROM prompts WHERE id = 'u99'"),
+        1
+    );
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM raw_chunks"), 2);
+}
