@@ -2,6 +2,7 @@
 
 pub mod adapters;
 pub mod config;
+pub mod daemon;
 pub mod db;
 pub mod doctor;
 pub mod event;
@@ -9,3 +10,5 @@ pub mod ingest;
 pub mod insights;
 pub mod prices;
 pub mod report;
+pub mod server;
+pub mod skills;

@@ -15,6 +15,14 @@ pub fn open(path: &Path) -> Result<Connection> {
     Ok(conn)
 }
 
+/// A read-only connection for queries. Expects the database to exist already.
+pub fn open_read(path: &Path) -> Result<Connection> {
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .with_context(|| format!("opening {}", path.display()))?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    Ok(conn)
+}
+
 pub fn open_in_memory() -> Result<Connection> {
     let conn = Connection::open_in_memory()?;
     init(&conn)?;

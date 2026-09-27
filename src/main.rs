@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use calvin::config::{self, Config};
 use calvin::insights::{CostBy, Since};
-use calvin::{db, doctor, ingest, report};
+use calvin::{daemon, db, doctor, ingest, report};
 use indicatif::{ProgressBar, ProgressStyle};
 
 /// Import progress on stderr. Hidden when stderr isn't a terminal, and for small
@@ -47,6 +47,21 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Start calvin in the background and open the dashboard.
+    Start {
+        /// Run in this terminal instead of the background (for debugging or service managers).
+        #[arg(long)]
+        foreground: bool,
+        /// Don't open the browser.
+        #[arg(long)]
+        no_open: bool,
+    },
+    /// Stop the background process.
+    Stop,
+    /// Show whether calvin is running, where, and how fresh its data is.
+    Status,
+    /// Open the dashboard in your browser.
+    Open,
     /// Import new activity from your AI tools' logs (safe to re-run).
     Ingest,
     /// Print a report in the terminal. Imports new activity first.
@@ -96,6 +111,19 @@ enum GroupBy {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let cfg = Config::load()?;
+
+    // Lifecycle commands don't touch the database themselves.
+    match &cli.command {
+        Some(Command::Start {
+            foreground: true, ..
+        }) => return daemon::run_foreground(&cfg),
+        Some(Command::Start { no_open, .. }) => return daemon::start(!no_open),
+        Some(Command::Stop) => return daemon::stop(),
+        Some(Command::Status) => return daemon::status(),
+        Some(Command::Open) => return daemon::open(),
+        _ => {}
+    }
+
     let mut conn = db::open(&config::db_path()?)?;
     let prices = cfg.price_table();
 
@@ -150,6 +178,9 @@ fn main() -> Result<()> {
             }
         }
         Some(Command::Doctor) => doctor::run(&cfg, &conn)?,
+        Some(Command::Start { .. } | Command::Stop | Command::Status | Command::Open) => {
+            unreachable!()
+        }
         None => {
             ingest::ingest_claude_code(
                 &mut conn,

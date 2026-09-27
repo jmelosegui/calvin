@@ -19,6 +19,14 @@ use crate::prices::{ModelPrice, PriceTable};
 pub struct Config {
     pub paths: PathsConfig,
     pub prices: PricesConfig,
+    pub skills: SkillsConfig,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct SkillsConfig {
+    /// Extra folders containing skills (each skill is a folder with a SKILL.md).
+    pub extra_paths: Vec<PathBuf>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -47,6 +55,14 @@ impl Config {
 
     pub fn price_table(&self) -> PriceTable {
         PriceTable::with_overrides(&self.prices.models)
+    }
+
+    pub fn extra_skill_paths(&self) -> Vec<PathBuf> {
+        self.skills
+            .extra_paths
+            .iter()
+            .map(|p| expand_home(p))
+            .collect()
     }
 
     pub fn claude_dir(&self) -> Result<PathBuf> {

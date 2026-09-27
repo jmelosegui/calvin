@@ -352,6 +352,135 @@ pub fn cache(conn: &Connection, since: &Since) -> Result<Vec<CacheRow>> {
     Ok(rows)
 }
 
+#[derive(Debug, Serialize)]
+pub struct SkillUsage {
+    pub name: String,
+    pub installed: bool,
+    pub source: Option<String>,
+    pub description: String,
+    /// Times the model chose to run it (Skill tool).
+    pub model_runs: i64,
+    /// Times you ran it yourself as a /command.
+    pub command_runs: i64,
+    pub last_used: Option<String>,
+}
+
+/// Installed skills joined with how often each ran, including skills that never did.
+/// Skills that ran but are no longer installed are included with `installed: false`.
+pub fn skill_usage(
+    conn: &Connection,
+    since: &Since,
+    installed: &[crate::skills::InstalledSkill],
+) -> Result<Vec<SkillUsage>> {
+    let mut by_name: HashMap<String, SkillUsage> = installed
+        .iter()
+        .map(|s| {
+            let usage = SkillUsage {
+                name: s.name.clone(),
+                installed: true,
+                source: Some(s.source.clone()),
+                description: s.description.clone(),
+                model_runs: 0,
+                command_runs: 0,
+                last_used: None,
+            };
+            (s.name.clone(), usage)
+        })
+        .collect();
+    let newer = |a: &mut Option<String>, b: &str| {
+        if a.as_deref().is_none_or(|a| a < b) {
+            *a = Some(b.to_string());
+        }
+    };
+    for r in skills(conn, since)? {
+        let e = by_name
+            .entry(r.skill.clone())
+            .or_insert_with(|| SkillUsage {
+                name: r.skill.clone(),
+                installed: false,
+                source: None,
+                description: String::new(),
+                model_runs: 0,
+                command_runs: 0,
+                last_used: None,
+            });
+        e.model_runs += r.runs;
+        newer(&mut e.last_used, &r.last_used);
+    }
+    // Only /commands that name a known skill; built-ins like /clear are not skills.
+    for c in commands(conn, since)? {
+        if let Some(e) = by_name.get_mut(c.command.trim_start_matches('/')) {
+            e.command_runs += c.uses;
+            newer(&mut e.last_used, &c.last_used);
+        }
+    }
+    let mut out: Vec<_> = by_name.into_values().collect();
+    out.sort_by(|a, b| {
+        (b.model_runs + b.command_runs)
+            .cmp(&(a.model_runs + a.command_runs))
+            .then(a.name.cmp(&b.name))
+    });
+    Ok(out)
+}
+
+/// Working directories of every session seen, used to find project-level skills.
+pub fn project_dirs(conn: &Connection) -> Result<Vec<std::path::PathBuf>> {
+    let dirs = conn
+        .prepare("SELECT DISTINCT cwd FROM sessions WHERE cwd IS NOT NULL")?
+        .query_map([], |r| r.get::<_, String>(0))?
+        .filter_map(Result::ok)
+        .map(std::path::PathBuf::from)
+        .collect();
+    Ok(dirs)
+}
+
+#[derive(Debug, Serialize)]
+pub struct Activity {
+    pub ts: String,
+    /// `prompt`, `command`, `tool`, `skill`, `request`, `rejected`, `denied`, `interrupted`.
+    pub kind: String,
+    pub project: Option<String>,
+    pub label: String,
+    /// Tokens for requests; not set for other kinds.
+    pub tokens: Option<i64>,
+}
+
+/// The most recent events across all tables, newest first.
+pub fn recent_activity(conn: &Connection, limit: i64) -> Result<Vec<Activity>> {
+    let rows = conn
+        .prepare(
+            "SELECT * FROM (
+                 SELECT p.ts, p.kind, s.project, substr(p.text, 1, 120), NULL
+                 FROM prompts p LEFT JOIN sessions s ON s.id = p.session_id
+                 WHERE p.is_sidechain = 0 ORDER BY p.ts DESC LIMIT ?1)
+             UNION ALL SELECT * FROM (
+                 SELECT t.ts, CASE WHEN t.tool = 'Skill' THEN 'skill' ELSE 'tool' END, s.project,
+                        COALESCE(t.skill, t.tool), NULL
+                 FROM tool_calls t LEFT JOIN sessions s ON s.id = t.session_id
+                 ORDER BY t.ts DESC LIMIT ?1)
+             UNION ALL SELECT * FROM (
+                 SELECT r.ts, 'request', s.project, r.model, r.output_tokens
+                 FROM requests r LEFT JOIN sessions s ON s.id = r.session_id
+                 ORDER BY r.ts DESC LIMIT ?1)
+             UNION ALL SELECT * FROM (
+                 SELECT f.ts, f.kind, s.project, COALESCE(f.tool, ''), NULL
+                 FROM friction f LEFT JOIN sessions s ON s.id = f.session_id
+                 ORDER BY f.ts DESC LIMIT ?1)
+             ORDER BY 1 DESC LIMIT ?1",
+        )?
+        .query_map([limit], |r| {
+            Ok(Activity {
+                ts: r.get(0)?,
+                kind: r.get(1)?,
+                project: r.get(2)?,
+                label: r.get(3)?,
+                tokens: r.get(4)?,
+            })
+        })?
+        .collect::<Result<_, _>>()?;
+    Ok(rows)
+}
+
 fn ratio(part: Option<i64>, total: Option<i64>) -> Option<f64> {
     match (part, total) {
         (Some(p), Some(t)) if t > 0 => Some(p as f64 / t as f64),

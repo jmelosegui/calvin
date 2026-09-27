@@ -15,7 +15,7 @@ loads them into a local SQLite database, and shows you:
 - **Cost and cache hit rate** per day, project and model (estimated at API list price)
 - **Friction**: denied tool calls, interruptions, "no, that's wrong" replies
 
-> **Status:** early planning. Nothing is released yet.
+> **Status:** early development. Works with Claude Code on Windows; no releases yet.
 
 ## Local only
 
@@ -25,7 +25,15 @@ Your session logs contain prompts, source code and often confidential details. c
 - never writes to your harness folders or skill folders
 - serves its dashboard on `127.0.0.1` only
 
-## Install (planned)
+## Install
+
+From source, for now (needs Rust 1.95+):
+
+```sh
+cargo install --git https://github.com/jmelosegui/calvin
+```
+
+Planned, once there are releases:
 
 ```sh
 # macOS / Linux
@@ -35,12 +43,12 @@ curl -LsSf https://github.com/<owner>/calvin/releases/latest/download/calvin-ins
 irm https://github.com/<owner>/calvin/releases/latest/download/calvin-installer.ps1 | iex
 
 # Rust users
-cargo install calvin
 ```
 
-Or download a binary from Releases. There are no other dependencies.
+There are no other dependencies. The dashboard, its fonts and SQLite are all built into the
+one binary.
 
-## Usage (planned)
+## Usage
 
 ```sh
 calvin start   # import your history, keep following your sessions, open the dashboard
@@ -48,17 +56,21 @@ calvin stop    # stop it
 ```
 
 That's it. `calvin start` runs in the background and serves the dashboard at
-`http://127.0.0.1:7474`. Close the terminal and it keeps running until `calvin stop`.
+`http://127.0.0.1:1982`. Close the terminal and it keeps running until `calvin stop`.
 
 Also available:
 
 ```sh
-calvin status          # is it running, on which URL, how much data
-calvin open            # reopen the dashboard in your browser
-calvin report skills   # terminal reports, no browser needed
-calvin report prompts
-calvin report cost --by project --since 30d
-calvin doctor          # which harnesses were detected, and where
+calvin status                  # is it running, on which URL, how fresh the data is
+calvin open                    # reopen the dashboard in your browser
+calvin                         # import and print a 30-day summary in the terminal
+calvin report skills           # skills the model ran
+calvin report commands         # slash commands you typed
+calvin report prompts          # prompts you keep typing
+calvin report friction         # rejected / denied tool calls, interruptions, errors
+calvin report cache            # prompt-cache hit rate per model
+calvin report cost --by project --since 4w
+calvin doctor                  # what was detected, where, and log retention warnings
 ```
 
 ## How it works
@@ -66,7 +78,7 @@ calvin doctor          # which harnesses were detected, and where
 ```
                                   ┌──────────── calvin start ────────────┐
 ~/.claude/projects/**/*.jsonl ─┐  │                                      │
-(more harnesses via adapters) ─┼──► catch up + follow ──► SQLite ──► dashboard ──► 127.0.0.1:7474
+(more harnesses via adapters) ─┼──► catch up + follow ──► SQLite ──► dashboard ──► 127.0.0.1:1982
 skill folders ─────────────────┘  │                                      │
                                   └──────────── calvin stop ─────────────┘
 ```
