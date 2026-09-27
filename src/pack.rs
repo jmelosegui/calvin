@@ -324,7 +324,8 @@ mod tests {
         InstalledSkill {
             name: "demo".into(),
             description: "Demo".into(),
-            source: "user".into(),
+            kind: "global".into(),
+            detail: None,
             path: dir.join("SKILL.md").to_string_lossy().to_string(),
         }
     }

@@ -207,7 +207,7 @@
         const cls = "book" + (s.name === top ? " top" : n === 0 ? " unused" : "");
         const book = el("rect", { x, y: base - h, width: bookW, height: h, rx: 3, class: cls });
         const how = n === 0 ? "never ran" : `model ran it ${s.model_runs}× · you ran it ${s.command_runs}×`;
-        const where = s.installed ? s.source : "no longer installed";
+        const where = s.installed ? s.kind : "no longer installed";
         book.addEventListener("mousemove", (e) =>
           showTip(e, `<b>${esc(s.name)}</b> <span class="m">(${esc(where)})</span><br>${how}<br><span class="m">${esc(s.description).slice(0, 160)}</span>`));
         book.addEventListener("mouseleave", hideTip);

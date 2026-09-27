@@ -168,7 +168,7 @@ pub fn run_foreground(cfg: &Config) -> Result<()> {
             crate::update::enabled(cfg.updates.check),
             db_path,
             cfg.claude_dir()?,
-            cfg.extra_skill_paths(),
+            cfg.skill_folders(),
             cfg.price_table(),
             token.clone(),
             port,

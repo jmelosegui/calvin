@@ -44,15 +44,24 @@ const FONTS: &[(&str, &[u8])] = &[
     ),
 ];
 const SYNC_INTERVAL: Duration = Duration::from_secs(3);
+const SKILL_INDEX_INTERVAL: Duration = Duration::from_secs(60);
 /// How often to see whether the daily update check is due.
 const UPDATE_POLL: Duration = Duration::from_secs(60 * 60);
+
+/// Skill folders from config.
+#[derive(Debug, Default, Clone)]
+pub struct SkillFolders {
+    /// More places where skills are installed.
+    pub extra: Vec<PathBuf>,
+}
 
 pub struct AppState {
     pub data_dir: PathBuf,
     pub check_updates: bool,
     pub db_path: PathBuf,
     pub claude_dir: PathBuf,
-    pub extra_skill_paths: Vec<PathBuf>,
+    pub skill_folders: SkillFolders,
+    skill_index: Mutex<Option<Vec<skills::InstalledSkill>>>,
     pub prices: PriceTable,
     pub token: String,
     pub port: u16,
@@ -75,7 +84,7 @@ impl AppState {
         check_updates: bool,
         db_path: PathBuf,
         claude_dir: PathBuf,
-        extra_skill_paths: Vec<PathBuf>,
+        skill_folders: SkillFolders,
         prices: PriceTable,
         token: String,
         port: u16,
@@ -85,7 +94,8 @@ impl AppState {
             check_updates,
             db_path,
             claude_dir,
-            extra_skill_paths,
+            skill_folders,
+            skill_index: Mutex::new(None),
             prices,
             token,
             port,
@@ -357,21 +367,53 @@ async fn skill_usage(
     Query(p): Query<Params>,
 ) -> ApiResult<Vec<insights::SkillUsage>> {
     let since = p.since()?;
-    let claude_dir = st.claude_dir.clone();
-    let extra = st.extra_skill_paths.clone();
+    let s = st.clone();
     read(&st, move |c| {
-        let installed = skills::installed(&claude_dir, &insights::project_dirs(c)?, &extra);
+        let installed = installed_skills(&s, c)?;
         insights::skill_usage(c, &since, &installed)
     })
     .await
 }
 
+/// Installed skills, from the background index when it's ready. Building the index touches
+/// every project folder, which can be slow on an offline network drive, so requests never
+/// wait for it once it exists.
 fn installed_skills(st: &AppState, conn: &Connection) -> Result<Vec<skills::InstalledSkill>> {
-    Ok(skills::installed(
-        &st.claude_dir,
-        &insights::project_dirs(conn)?,
-        &st.extra_skill_paths,
-    ))
+    if let Some(cached) = st.skill_index.lock().unwrap().clone() {
+        return Ok(cached);
+    }
+    let fresh = scan_skills(st, conn)?;
+    *st.skill_index.lock().unwrap() = Some(fresh.clone());
+    Ok(fresh)
+}
+
+fn scan_skills(st: &AppState, conn: &Connection) -> Result<Vec<skills::InstalledSkill>> {
+    Ok(skills::installed(&skills::Locations {
+        claude_dir: st.claude_dir.clone(),
+        project_dirs: insights::project_dirs(conn)?,
+        extra: st.skill_folders.extra.clone(),
+    }))
+}
+
+/// Rebuild the skill index every minute, so new or edited skills show up.
+pub async fn skill_index_loop(st: Arc<AppState>) {
+    loop {
+        let s = st.clone();
+        let result = tokio::task::spawn_blocking(move || -> Result<()> {
+            let conn = db::open_read(&s.db_path)?;
+            let fresh = scan_skills(&s, &conn)?;
+            *s.skill_index.lock().unwrap() = Some(fresh);
+            Ok(())
+        })
+        .await;
+        if let Ok(Err(e)) = result {
+            eprintln!("skill index failed: {e:#}");
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(SKILL_INDEX_INTERVAL) => {}
+            _ = st.stopped() => return,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -559,6 +601,7 @@ pub async fn serve(listener: tokio::net::TcpListener, st: Arc<AppState>) -> Resu
     let app = router(st.clone());
     tokio::spawn(sync_loop(st.clone()));
     tokio::spawn(update_loop(st.clone()));
+    tokio::spawn(skill_index_loop(st.clone()));
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),

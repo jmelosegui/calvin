@@ -356,7 +356,10 @@ pub fn cache(conn: &Connection, since: &Since) -> Result<Vec<CacheRow>> {
 pub struct SkillUsage {
     pub name: String,
     pub installed: bool,
-    pub source: Option<String>,
+    /// Type of folder (`global`, `project`, `plugin`); `None` if no longer installed.
+    pub kind: Option<String>,
+    /// Where it came from, if recorded.
+    pub detail: Option<String>,
     pub description: String,
     /// Times the model chose to run it (Skill tool).
     pub model_runs: i64,
@@ -378,7 +381,8 @@ pub fn skill_usage(
             let usage = SkillUsage {
                 name: s.name.clone(),
                 installed: true,
-                source: Some(s.source.clone()),
+                kind: Some(s.kind.clone()),
+                detail: s.detail.clone(),
                 description: s.description.clone(),
                 model_runs: 0,
                 command_runs: 0,
@@ -398,7 +402,8 @@ pub fn skill_usage(
             .or_insert_with(|| SkillUsage {
                 name: r.skill.clone(),
                 installed: false,
-                source: None,
+                kind: None,
+                detail: Some("ran in a session but is no longer installed".into()),
                 description: String::new(),
                 model_runs: 0,
                 command_runs: 0,

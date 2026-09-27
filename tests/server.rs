@@ -6,7 +6,7 @@ use axum::http::{Request, StatusCode};
 use calvin::db;
 use calvin::ingest::{Quiet, ingest_claude_code};
 use calvin::prices::PriceTable;
-use calvin::server::{AppState, router};
+use calvin::server::{AppState, SkillFolders, router};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
@@ -23,7 +23,7 @@ fn app() -> (tempfile::TempDir, axum::Router) {
         false,
         db_path,
         claude,
-        vec![],
+        SkillFolders::default(),
         PriceTable::bundled(),
         "secret".into(),
         PORT,

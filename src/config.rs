@@ -71,6 +71,12 @@ impl Config {
         PriceTable::with_overrides(&self.prices.models)
     }
 
+    pub fn skill_folders(&self) -> crate::server::SkillFolders {
+        crate::server::SkillFolders {
+            extra: self.extra_skill_paths(),
+        }
+    }
+
     pub fn extra_skill_paths(&self) -> Vec<PathBuf> {
         self.skills
             .extra_paths

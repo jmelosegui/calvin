@@ -108,7 +108,7 @@ Optional. Everything works with defaults. `config.toml` lives in your OS config 
 
 ```toml
 [skills]
-extra_paths = ["~/code/my-skills"]
+extra_paths = ["~/other/skills"]  # more places where skills are installed
 
 [prices.overrides]
 # "model-id" = { input = 0.0, output = 0.0 }   # USD per million tokens

@@ -12,6 +12,7 @@
       background: transparent; color: var(--text); font: 500 14px "Outfit", sans-serif;
     }
     .search:focus { outline: none; border-color: var(--orange); }
+    .origin { margin-top: 4px; color: var(--muted); font-size: 13px; }
 
     .list { display: grid; gap: 0; }
     .row {
@@ -91,7 +92,7 @@
       <input class="search" id="q" type="search" placeholder="Search skills  ( / )" autocomplete="off" />
       <div class="seg" id="source">
         <button data-source="" class="active">All</button>
-        <button data-source="user">Mine</button>
+        <button data-source="global">Global</button>
         <button data-source="project">Project</button>
         <button data-source="plugin">Plugins</button>
       </div>
@@ -135,12 +136,12 @@
     const selected = new Set();
     const details = new Map(); // name → /api/skills/detail response
 
-    const SOURCE = { user: "mine", project: "project", plugin: "plugin", extra: "extra" };
+    const KIND = { global: "global", project: "project", plugin: "plugin" };
 
     function renderList() {
       const q = $("#q").value.trim().toLowerCase();
       const rows = skills.filter((s) => s.installed)
-        .filter((s) => !source || s.source === source)
+        .filter((s) => !source || s.kind === source)
         .filter((s) => !q || s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q));
       $("#list").innerHTML =
         `<div class="row head"><span></span><span>Skill</span><span style="text-align:right">Runs</span><span style="text-align:right">Last used</span></div>` +
@@ -149,7 +150,7 @@
               const n = s.model_runs + s.command_runs;
               return `<div class="row ${s.name === current ? "current" : ""}" data-name="${esc(s.name)}">
                 <input type="checkbox" ${selected.has(s.name) ? "checked" : ""} aria-label="Select ${esc(s.name)}" />
-                <div><div class="nm">${esc(s.name)}<small>${SOURCE[s.source] ?? esc(s.source)}</small></div><div class="desc">${esc(s.description)}</div></div>
+                <div><div class="nm">${esc(s.name)}<small>${KIND[s.kind] ?? esc(s.kind)}</small></div><div class="desc">${esc(s.description)}</div></div>
                 <span class="uses ${n ? "" : "zero"}" title="model ran it ${s.model_runs}× · you ran it ${s.command_runs}×">${n}</span>
                 <span class="last">${day(s.last_used)}</span>
               </div>`;
@@ -183,10 +184,11 @@
           : "";
         box.innerHTML = `
           <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-            <h2 style="margin:0">${esc(d.skill.name)}</h2><span class="badge">${SOURCE[d.skill.source] ?? esc(d.skill.source)}</span>
+            <h2 style="margin:0">${esc(d.skill.name)}</h2><span class="badge">${KIND[d.skill.kind] ?? esc(d.skill.kind)}</span>
             <button class="btn" id="openfolder" style="margin-left:auto" title="Open in your file manager">Open folder</button>
             <button class="btn primary" id="packone">Pack this skill</button>
           </div>
+          ${d.skill.detail ? `<div class="origin">${esc(d.skill.detail)}</div>` : ""}
           <p class="sub" style="margin-top:8px">${esc(d.skill.description) || "No description."}</p>
           <div class="path"><span>${esc(p.dir)}</span><button class="copy" id="copypath" title="Copy location" aria-label="Copy location">${COPY_ICON}</button></div>
           <div class="stats">
