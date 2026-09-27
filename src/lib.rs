@@ -13,4 +13,5 @@ pub mod prices;
 pub mod report;
 pub mod server;
 pub mod skills;
+pub mod timeline;
 pub mod update;

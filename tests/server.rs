@@ -159,3 +159,68 @@ async fn open_folder_needs_the_action_header() {
         StatusCode::BAD_REQUEST
     );
 }
+
+#[tokio::test]
+async fn sessions_list_and_timeline() {
+    let (_tmp, app) = app();
+    let res = app
+        .clone()
+        .oneshot(get("/api/sessions?since=all", "127.0.0.1:1982"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let list: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    assert_eq!(list[0]["title"], "Fix failing tests");
+    assert_eq!(list[0]["friction"], 3);
+
+    let id = list[0]["id"].as_str().unwrap();
+    let res = app
+        .clone()
+        .oneshot(get(
+            &format!("/api/sessions/detail?id={id}"),
+            "127.0.0.1:1982",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let s: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let turns = s["turns"].as_array().unwrap();
+    // Prompts and the /shipit command each start a turn.
+    let prompts: Vec<_> = turns.iter().filter_map(|t| t["prompt"].as_str()).collect();
+    assert_eq!(prompts[0], "run the tests and fix whatever fails");
+    assert!(prompts.contains(&"/shipit commit staged"));
+    // The first turn holds the Bash call with its result and the split response counted once.
+    let first = &turns[0];
+    let tool = first["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["type"] == "tool")
+        .unwrap();
+    assert_eq!(
+        (
+            tool["name"].as_str(),
+            tool["summary"].as_str(),
+            tool["outcome"].as_str()
+        ),
+        (Some("Bash"), Some("cargo test"), Some("ok"))
+    );
+    assert_eq!(tool["result"], "test result: ok");
+    // The same turn continues through the Skill call (rejected) and the interruption.
+    let kinds: Vec<_> = first["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["type"].as_str().unwrap())
+        .collect();
+    assert!(kinds.contains(&"interrupted"));
+
+    let missing = app
+        .oneshot(get("/api/sessions/detail?id=nope", "127.0.0.1:1982"))
+        .await
+        .unwrap();
+    assert!(!missing.status().is_success());
+}

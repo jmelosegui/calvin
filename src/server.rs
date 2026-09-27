@@ -25,6 +25,7 @@ use crate::{db, ingest, pack, prices::PriceTable, skills, update};
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
 const SKILLS_HTML: &str = include_str!("../web/skills.html");
+const SESSIONS_HTML: &str = include_str!("../web/sessions.html");
 const STYLE_CSS: &str = include_str!("../web/style.css");
 /// SKILL.md previews are cut off beyond this.
 const PREVIEW_BYTES: usize = 200 * 1024;
@@ -135,6 +136,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(|| async { ([(header::CONTENT_TYPE, "image/svg+xml")], LOGO_SVG) }),
         )
         .route("/skills", get(|| async { html(SKILLS_HTML) }))
+        .route("/sessions", get(|| async { html(SESSIONS_HTML) }))
         .route(
             "/style.css",
             get(|| async {
@@ -150,6 +152,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/shutdown", post(shutdown))
         .route("/api/summary", get(summary))
         .route("/api/cost", get(cost))
+        .route("/api/sessions", get(session_list))
+        .route("/api/sessions/detail", get(session_detail))
         .route("/api/skills", get(skill_usage))
         .route("/api/skills/detail", get(skill_detail))
         .route("/api/skills/pack", get(skill_pack))
@@ -287,6 +291,7 @@ where
 #[derive(Deserialize)]
 struct Params {
     since: Option<String>,
+    id: Option<String>,
     name: Option<String>,
     names: Option<String>,
     by: Option<String>,
@@ -378,6 +383,28 @@ async fn skill_usage(
 /// Installed skills, from the background index when it's ready. Building the index touches
 /// every project folder, which can be slow on an offline network drive, so requests never
 /// wait for it once it exists.
+async fn session_list(
+    State(st): State<Arc<AppState>>,
+    Query(p): Query<Params>,
+) -> ApiResult<Vec<insights::SessionRow>> {
+    let since = p.since()?;
+    let limit = p.limit.unwrap_or(500).clamp(1, 5000);
+    read(&st, move |c| insights::sessions(c, &since, limit)).await
+}
+
+async fn session_detail(
+    State(st): State<Arc<AppState>>,
+    Query(p): Query<Params>,
+) -> ApiResult<crate::timeline::SessionView> {
+    let Some(id) = p.id.clone() else {
+        return Err(ApiError(StatusCode::BAD_REQUEST, "missing ?id=".into()));
+    };
+    read(&st, move |c| {
+        crate::timeline::session(c, &id)?.ok_or_else(|| anyhow::anyhow!("no session with id {id}"))
+    })
+    .await
+}
+
 fn installed_skills(st: &AppState, conn: &Connection) -> Result<Vec<skills::InstalledSkill>> {
     if let Some(cached) = st.skill_index.lock().unwrap().clone() {
         return Ok(cached);

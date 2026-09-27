@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>calvin · Sessions</title>
+  <link rel="icon" type="image/svg+xml" href="/logo.svg" />
+  <link rel="stylesheet" href="/style.css" />
+  <style>
+    .search {
+      width: 260px; padding: 10px 14px; border: 1.5px solid var(--line-dim); border-radius: 8px;
+      background: transparent; color: var(--text); font: 500 14px "Outfit", sans-serif;
+    }
+    .search:focus, select:focus { outline: none; border-color: var(--orange); }
+    select {
+      padding: 9px 12px; border: 1.5px solid var(--line-dim); border-radius: 8px; background: var(--bg);
+      color: var(--text); font: 500 14px "Outfit", sans-serif;
+    }
+
+    /* ---------- list ---------- */
+    table.sessions { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .sessions th {
+      padding: 8px 10px; text-align: left; font-size: 11px; font-weight: 500; letter-spacing: 0.08em; white-space: nowrap;
+      text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--line-dim);
+    }
+    .sessions th.num { text-align: right; }
+    .sessions td:nth-child(2) { width: 100%; }
+    .sessions .title, .sessions .first { max-width: 620px; }
+    .sessions td { padding: 11px 10px; border-bottom: 1px dashed var(--line-dim); vertical-align: top; }
+    .sessions tr.row { cursor: pointer; }
+    .sessions tr.row:hover td { background: var(--btn); }
+    .sessions .num { text-align: right; white-space: nowrap; font-family: "JetBrains Mono", monospace; font-size: 13px; }
+    .sessions .num.zero { color: var(--faint); }
+    .sessions .when { white-space: nowrap; color: var(--muted); font-size: 13px; }
+    .sessions .title { font-weight: 600; }
+    .sessions .first { margin-top: 2px; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis;
+      display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
+    .sessions .proj { color: var(--muted); font-size: 13px; white-space: nowrap; }
+    .sessions .proj small { display: block; color: var(--faint); font-size: 12px; }
+    .friction { color: var(--orange-ink); }
+
+    /* ---------- detail ---------- */
+    .back { color: var(--muted); text-decoration: none; font-size: 14px; }
+    .back:hover { color: var(--text); }
+    .meta { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
+    .stats { display: flex; flex-wrap: wrap; gap: 32px; margin: 18px 0 4px; }
+    .stats div b { display: block; font-size: 26px; font-weight: 700; }
+    .stats div span { font-size: 12px; color: var(--muted); }
+
+    .turn { margin: 0 0 28px; }
+    .you {
+      position: relative; max-width: 88%; margin: 0 0 18px; padding: 14px 16px; border: 1.5px solid var(--line);
+      border-radius: 12px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 1.5;
+    }
+    .you::after {
+      content: ""; position: absolute; left: 18px; bottom: -9px; width: 14px; height: 14px; background: var(--bg);
+      border-left: 1.5px solid var(--line); border-bottom: 1.5px solid var(--line); transform: skewY(-35deg) rotate(-10deg);
+    }
+    .you .cmd { color: var(--orange-ink); font-family: "JetBrains Mono", monospace; font-size: 14px; }
+    .you.more { max-height: 220px; overflow: hidden; cursor: pointer; }
+    .you.more::before {
+      content: "show all"; position: absolute; right: 12px; bottom: 8px; padding: 2px 8px; border-radius: 6px;
+      background: var(--btn); color: var(--muted); font-size: 12px;
+    }
+    .reply { margin: 0 0 0 26px; padding-left: 16px; border-left: 2px solid var(--line-dim); }
+    .text { margin: 0 0 12px; font-size: 14.5px; line-height: 1.6; overflow-wrap: anywhere; }
+    .text p { margin: 0 0 8px; }
+    .text h4 { margin: 12px 0 6px; font-size: 15px; }
+    .text a { color: var(--orange-ink); }
+    .text code { padding: 1px 5px; border-radius: 4px; background: var(--btn); font: 500 12.5px "JetBrains Mono", monospace; }
+    .text pre, .io pre {
+      margin: 8px 0; padding: 10px 12px; overflow: auto; border: 1px solid var(--line-dim); border-radius: 8px;
+      font: 500 12px/1.55 "JetBrains Mono", monospace; white-space: pre;
+    }
+    .tool {
+      display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 10px;
+      margin: 0 0 6px; padding: 6px 10px; border: 1px solid var(--line-dim); border-radius: 8px; cursor: pointer;
+      font: 500 12.5px "JetBrains Mono", monospace;
+    }
+    .tool:hover { border-color: var(--line); }
+    .tool .nm { color: var(--text); font-weight: 700; }
+    .tool .sm { color: var(--muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .tool .dur { color: var(--faint); }
+    .chip { padding: 1px 7px; border-radius: 5px; font: 600 11px "Outfit", sans-serif; border: 1px solid var(--line-dim); color: var(--muted); }
+    .chip.error, .chip.rejected, .chip.denied { border-color: var(--orange); color: var(--orange-ink); }
+    .io { margin: -2px 0 10px; padding: 4px 10px 8px; border: 1px solid var(--line-dim); border-top: 0; border-radius: 0 0 8px 8px; }
+    .io .lbl { margin-top: 6px; color: var(--muted); font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase; }
+    .io pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; }
+    .interrupt { margin: 6px 0 10px; color: var(--orange-ink); font-size: 13px; font-weight: 600; }
+    .foot { margin: 8px 0 0 26px; color: var(--faint); font-size: 12px; }
+    .foot b { color: var(--muted); font-weight: 600; }
+  </style>
+</head>
+<body>
+  <header class="top">
+    <svg class="logo" viewBox="0 0 64 64" aria-label="calvin">
+      <line class="ln" x1="32" y1="15" x2="32" y2="8" />
+      <circle class="or" cx="32" cy="7" r="3.5" />
+      <rect class="ln" x="9" y="16" width="46" height="38" rx="11" />
+      <circle class="or" cx="32" cy="35" r="11" />
+      <circle class="pupil" cx="35.5" cy="31.5" r="3.4" />
+    </svg>
+    <nav class="nav"><a href="/">Prime Radiant</a><a href="/sessions" class="active">Sessions</a><a href="/skills">Skills</a></nav>
+    <button class="icon-btn" id="theme" title="Toggle theme (T)">◐</button>
+  </header>
+
+  <div id="view"></div>
+
+  <footer id="footer">Conversations come from your local Claude Code logs and never leave this machine.</footer>
+
+  <script>
+    const $ = (s) => document.querySelector(s);
+    const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+    const money = (v) => "$" + (v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(2) : v.toFixed(3));
+    const tok = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n));
+    const when = (ts) => new Date(ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+    function dur(ms) {
+      if (ms == null || ms < 0) return "";
+      if (ms < 1000) return `${ms} ms`;
+      const s = Math.round(ms / 1000);
+      if (s < 60) return `${s}s`;
+      const m = Math.floor(s / 60);
+      if (m < 60) return `${m}m ${s % 60}s`;
+      return `${Math.floor(m / 60)}h ${m % 60}m`;
+    }
+    const span = (a, b) => (a && b ? new Date(b) - new Date(a) : null);
+    async function api(path) {
+      const r = await fetch(path);
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `${r.status}`);
+      return r.json();
+    }
+
+    // Small, safe Markdown: escape first, then fences, inline code, bold and headings.
+    function md(src) {
+      const parts = String(src).split(/```/);
+      return parts.map((part, i) => {
+        if (i % 2 === 1) {
+          const body = part.replace(/^[\w+-]*\n/, "");
+          return `<pre>${esc(body.replace(/\n$/, ""))}</pre>`;
+        }
+        return esc(part)
+          .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+          .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+          .replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>")
+          .replace(/^#{1,6} (.+)$/gm, "<h4>$1</h4>")
+          .split(/\n{2,}/).map((p) => (p.trim() ? `<p>${p.replace(/\n/g, "<br>")}</p>` : "")).join("");
+      }).join("");
+    }
+
+    // ---------- list ----------
+    let range = "30d";
+    let sessions = [];
+
+    function listView() {
+      document.title = "calvin · Sessions";
+      $("#view").innerHTML = `
+        <div class="titlebar">
+          <h1>Session <span class="px">EXPLORER</span></h1>
+          <div class="actions">
+            <input class="search" id="q" type="search" placeholder="Search titles and prompts  ( / )" autocomplete="off" />
+            <select id="project"><option value="">All projects</option></select>
+            <div class="seg" id="range">
+              <button data-r="7d">7d</button><button data-r="30d">30d</button><button data-r="90d">90d</button><button data-r="all">All</button>
+            </div>
+          </div>
+        </div>
+        <main><section class="panel"><div id="list"><div class="empty">Loading…</div></div></section></main>`;
+      document.querySelectorAll("#range button").forEach((b) => {
+        b.classList.toggle("active", b.dataset.r === range);
+        b.onclick = () => { range = b.dataset.r; listView(); };
+      });
+      $("#q").oninput = renderList;
+      $("#project").onchange = renderList;
+      api(`/api/sessions?since=${range}`).then((rows) => {
+        sessions = rows;
+        const projects = [...new Set(rows.map((r) => r.project).filter(Boolean))].sort();
+        $("#project").innerHTML += projects.map((p) => `<option>${esc(p)}</option>`).join("");
+        renderList();
+      }).catch((e) => ($("#list").innerHTML = `<div class="empty error">${esc(e.message)}</div>`));
+    }
+
+    function renderList() {
+      const q = $("#q").value.trim().toLowerCase();
+      const project = $("#project").value;
+      const rows = sessions
+        .filter((s) => !project || s.project === project)
+        .filter((s) => !q || [s.title, s.first_prompt, s.project, s.git_branch].some((v) => v && v.toLowerCase().includes(q)));
+      if (!rows.length) {
+        $("#list").innerHTML = `<div class="empty">No sessions match.</div>`;
+        return;
+      }
+      const total = rows.reduce((t, s) => t + s.cost_usd, 0);
+      $("#list").innerHTML = `
+        <p class="sub">${rows.length} session${rows.length === 1 ? "" : "s"} · ${money(total)} at API list price. Click one to read it.</p>
+        <table class="sessions">
+          <thead><tr><th>When</th><th>Session</th><th>Project</th><th class="num">Prompts</th><th class="num">Tools</th><th class="num">Friction</th><th class="num">Length</th><th class="num">Cost</th></tr></thead>
+          <tbody>${rows.map((s) => `
+            <tr class="row" data-id="${esc(s.id)}">
+              <td class="when">${when(s.started_at)}</td>
+              <td><div class="title">${esc(s.title || s.first_prompt || "(untitled)")}</div>${s.title && s.first_prompt ? `<div class="first">${esc(s.first_prompt)}</div>` : ""}</td>
+              <td class="proj">${esc(s.project ?? "")}${s.git_branch ? `<small>${esc(s.git_branch)}</small>` : ""}</td>
+              <td class="num">${s.prompts}</td>
+              <td class="num">${s.tool_calls}</td>
+              <td class="num ${s.friction ? "friction" : "zero"}">${s.friction}</td>
+              <td class="num">${dur(span(s.started_at, s.ended_at))}</td>
+              <td class="num">${money(s.cost_usd)}</td>
+            </tr>`).join("")}</tbody>
+        </table>`;
+      document.querySelectorAll("tr.row").forEach((tr) => (tr.onclick = () => (location.hash = encodeURIComponent(tr.dataset.id))));
+    }
+
+    // ---------- detail ----------
+    let tools = [];
+
+    async function detailView(id) {
+      $("#view").innerHTML = `<main><section class="panel"><div class="empty">Loading the conversation…</div></section></main>`;
+      let s;
+      try {
+        s = await api(`/api/sessions/detail?id=${encodeURIComponent(id)}`);
+      } catch (e) {
+        $("#view").innerHTML = `<main><section class="panel"><a class="back" href="#">← All sessions</a><div class="empty error">${esc(e.message)}</div></section></main>`;
+        return;
+      }
+      document.title = `calvin · ${s.title ?? "Session"}`;
+      tools = [];
+      const prompts = s.turns.filter((t) => t.prompt).length;
+      const toolCount = s.turns.reduce((n, t) => n + t.tool_calls, 0);
+      const html = s.turns.map((t) => {
+        const you = t.prompt == null ? "" : t.kind === "command"
+          ? `<div class="you"><span class="cmd">${esc(t.prompt)}</span></div>`
+          : `<div class="you ${t.prompt.length > 900 ? "more" : ""}">${esc(t.prompt)}</div>`;
+        const items = t.items.map((i) => {
+          if (i.type === "text") return `<div class="text">${md(i.text)}</div>`;
+          if (i.type === "interrupted") return `<div class="interrupt">You interrupted here</div>`;
+          const n = tools.push(i) - 1;
+          const outcome = i.outcome ?? "no result";
+          return `<div class="tool" data-t="${n}"><span class="nm">${esc(i.name)}</span><span class="sm">${esc(i.summary)}</span>
+            <span class="dur">${dur(i.duration_ms)}</span><span class="chip ${esc(outcome)}">${esc(outcome)}</span></div>`;
+        }).join("");
+        const foot = t.requests || t.tool_calls
+          ? `<div class="foot"><b>${money(t.cost_usd)}</b> · ${t.requests} model request${t.requests === 1 ? "" : "s"} · ${tok(t.output_tokens)} output tokens · ${t.tool_calls} tool call${t.tool_calls === 1 ? "" : "s"}${span(t.started_at, t.ended_at) ? ` · ${dur(span(t.started_at, t.ended_at))}` : ""}</div>`
+          : "";
+        return `<div class="turn">${you}${items ? `<div class="reply">${items}</div>` : ""}${foot}</div>`;
+      }).join("");
+
+      $("#view").innerHTML = `
+        <main><section class="panel">
+          <a class="back" href="#">← All sessions</a>
+          <h2 style="margin:12px 0 0;font-size:24px">${esc(s.title ?? "Untitled session")}</h2>
+          <p class="meta">${esc(s.project ?? "")}${s.git_branch ? ` · ${esc(s.git_branch)}` : ""}${s.started_at ? ` · ${when(s.started_at)}` : ""}${s.cwd ? ` · <span style="font-family:JetBrains Mono,monospace;font-size:12px">${esc(s.cwd)}</span>` : ""}</p>
+          <div class="stats">
+            <div><b>${prompts}</b><span>prompts</span></div>
+            <div><b>${toolCount}</b><span>tool calls</span></div>
+            <div><b>${dur(span(s.started_at, s.ended_at)) || "–"}</b><span>from first to last message</span></div>
+            <div><b>${money(s.cost_usd)}</b><span>at API list price${s.subagent_cost_usd ? `, ${money(s.subagent_cost_usd)} of it in subagents` : ""}</span></div>
+          </div>
+        </section>
+        <section class="panel" id="conversation">${html || `<div class="empty">This session has no stored conversation.</div>`}</section></main>`;
+
+      $("#conversation").onclick = (e) => {
+        const more = e.target.closest(".you.more");
+        if (more) { more.classList.remove("more"); return; }
+        const row = e.target.closest(".tool");
+        if (!row) return;
+        const open = row.nextElementSibling;
+        if (open && open.classList.contains("io")) { open.remove(); return; }
+        const t = tools[+row.dataset.t];
+        row.insertAdjacentHTML("afterend", `<div class="io"><div class="lbl">Input</div><pre>${esc(t.input)}</pre>${t.result != null ? `<div class="lbl">Result</div><pre>${esc(t.result)}</pre>` : ""}</div>`);
+      };
+      window.scrollTo(0, 0);
+    }
+
+    // ---------- routing and controls ----------
+    function route() {
+      const id = decodeURIComponent(location.hash.slice(1));
+      id ? detailView(id) : listView();
+    }
+    window.addEventListener("hashchange", route);
+
+    const toggleTheme = () => {
+      const r = document.documentElement;
+      r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+      localStorage.setItem("calvin-theme", r.dataset.theme);
+    };
+    $("#theme").onclick = toggleTheme;
+    document.addEventListener("keydown", (e) => {
+      if (e.target.closest("input, textarea, select")) return;
+      if (e.key === "/" && $("#q")) { e.preventDefault(); $("#q").focus(); }
+      else if (e.key === "Escape" && location.hash) location.hash = "";
+      else if (e.key.toLowerCase() === "t") toggleTheme();
+    });
+    document.documentElement.dataset.theme = localStorage.getItem("calvin-theme") ?? "dark";
+    route();
+  </script>
+</body>
+</html>

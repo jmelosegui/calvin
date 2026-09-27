@@ -486,6 +486,61 @@ pub fn recent_activity(conn: &Connection, limit: i64) -> Result<Vec<Activity>> {
     Ok(rows)
 }
 
+#[derive(Debug, Serialize)]
+pub struct SessionRow {
+    pub id: String,
+    pub title: Option<String>,
+    pub first_prompt: Option<String>,
+    pub project: Option<String>,
+    pub git_branch: Option<String>,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub prompts: i64,
+    pub requests: i64,
+    pub cost_usd: f64,
+    pub tool_calls: i64,
+    /// Interruptions, rejected and denied tool calls.
+    pub friction: i64,
+}
+
+/// Sessions that started in the period, newest first.
+pub fn sessions(conn: &Connection, since: &Since, limit: i64) -> Result<Vec<SessionRow>> {
+    let rows = conn
+        .prepare(
+            "SELECT s.id, s.title,
+                    (SELECT substr(text, 1, 200) FROM prompts p
+                     WHERE p.session_id = s.id AND p.is_sidechain = 0 ORDER BY p.ts LIMIT 1),
+                    s.project, s.git_branch, s.started_at, s.ended_at,
+                    (SELECT COUNT(*) FROM prompts p WHERE p.session_id = s.id AND p.is_sidechain = 0),
+                    (SELECT COUNT(*) FROM requests r WHERE r.session_id = s.id),
+                    (SELECT COALESCE(SUM(cost_usd), 0) FROM requests r WHERE r.session_id = s.id),
+                    (SELECT COUNT(*) FROM tool_calls t WHERE t.session_id = s.id),
+                    (SELECT COUNT(*) FROM friction f WHERE f.session_id = s.id)
+             FROM sessions s
+             WHERE s.started_at IS NOT NULL AND s.started_at >= ?1
+             ORDER BY s.started_at DESC LIMIT ?2",
+        )?
+        .query_map(params![since.0, limit], |r| {
+            Ok(SessionRow {
+                id: r.get(0)?,
+                title: r.get(1)?,
+                first_prompt: r.get(2)?,
+                project: r.get(3)?,
+                git_branch: r.get(4)?,
+                started_at: r.get(5)?,
+                ended_at: r.get(6)?,
+                prompts: r.get(7)?,
+                requests: r.get(8)?,
+                cost_usd: r.get(9)?,
+                tool_calls: r.get(10)?,
+                friction: r.get(11)?,
+            })
+        })?
+        .filter(|r| r.as_ref().map_or(true, |s| s.prompts > 0 || s.requests > 0))
+        .collect::<Result<_, _>>()?;
+    Ok(rows)
+}
+
 fn ratio(part: Option<i64>, total: Option<i64>) -> Option<f64> {
     match (part, total) {
         (Some(p), Some(t)) if t > 0 => Some(p as f64 / t as f64),

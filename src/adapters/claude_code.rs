@@ -300,6 +300,168 @@ pub fn strip_binary(v: &mut Value) -> bool {
     }
 }
 
+/// The conversation in one log file, as timeline events for the session browser.
+pub fn timeline(records: &[Value]) -> Vec<crate::timeline::Event> {
+    use crate::timeline::{Event, Item, preview};
+
+    let mut out: Vec<Event> = Vec::new();
+    // Where each tool call sits in `out`, to attach its result later.
+    let mut tools: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
+    for v in records {
+        let Some(ts) = str_at(v, "timestamp") else {
+            continue;
+        };
+        let Some(message) = v.get("message") else {
+            continue;
+        };
+        match str_at(v, "type").as_deref() {
+            Some("assistant") => {
+                let request_id = str_at(v, "requestId").or_else(|| str_at(message, "id"));
+                for block in content_blocks(message) {
+                    match str_at(block, "type").as_deref() {
+                        Some("text") => {
+                            let text = str_at(block, "text").unwrap_or_default();
+                            if !text.trim().is_empty() {
+                                out.push(Event::Item(Item::Text {
+                                    ts: ts.clone(),
+                                    text,
+                                    request_id: request_id.clone(),
+                                }));
+                            }
+                        }
+                        Some("tool_use") => {
+                            let (Some(id), Some(name)) =
+                                (str_at(block, "id"), str_at(block, "name"))
+                            else {
+                                continue;
+                            };
+                            let input = block.get("input").cloned().unwrap_or(Value::Null);
+                            tools.insert(id.clone(), out.len());
+                            out.push(Event::Item(Item::Tool {
+                                ts: ts.clone(),
+                                id,
+                                summary: tool_summary(&name, &input),
+                                name,
+                                input: preview(
+                                    &serde_json::to_string_pretty(&input).unwrap_or_default(),
+                                ),
+                                outcome: None,
+                                result: None,
+                                duration_ms: None,
+                                request_id: request_id.clone(),
+                            }));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Some("user") => {
+                let mut had_result = false;
+                for block in content_blocks(message) {
+                    if str_at(block, "type").as_deref() != Some("tool_result") {
+                        continue;
+                    }
+                    had_result = true;
+                    let Some(id) = str_at(block, "tool_use_id") else {
+                        continue;
+                    };
+                    let Some(&index) = tools.get(&id) else {
+                        continue;
+                    };
+                    let text = result_text(block);
+                    let is_error = block
+                        .get("is_error")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    let outcome = if text.contains(REJECTED_MARKER) {
+                        Outcome::Rejected
+                    } else if text.contains(DENIED_MARKER) {
+                        Outcome::Denied
+                    } else if is_error {
+                        Outcome::Error
+                    } else {
+                        Outcome::Ok
+                    };
+                    if let Event::Item(Item::Tool {
+                        ts: started,
+                        outcome: o,
+                        result,
+                        duration_ms,
+                        ..
+                    }) = &mut out[index]
+                    {
+                        *o = Some(outcome.as_str().to_string());
+                        *result = Some(preview(&text));
+                        *duration_ms = millis_between(started, &ts);
+                    }
+                }
+                if had_result || v.get("isMeta").and_then(Value::as_bool).unwrap_or(false) {
+                    continue;
+                }
+                let text = user_text(message);
+                let text = text.trim();
+                if text.is_empty()
+                    || text.starts_with("<local-command-")
+                    || text.starts_with("Caveat: The messages below")
+                {
+                    continue;
+                }
+                if text.starts_with(INTERRUPTED_MARKER) {
+                    out.push(Event::Item(Item::Interrupted { ts }));
+                    continue;
+                }
+                match command_text(text) {
+                    Some(cmd) => out.push(Event::Prompt {
+                        ts,
+                        text: cmd,
+                        kind: "command",
+                    }),
+                    None => out.push(Event::Prompt {
+                        ts,
+                        text: text.to_string(),
+                        kind: "prompt",
+                    }),
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// One line describing what a tool call did.
+fn tool_summary(name: &str, input: &Value) -> String {
+    let field = |k: &str| input.get(k).and_then(Value::as_str).map(str::to_string);
+    let text = match name {
+        "Bash" | "PowerShell" => field("command"),
+        "Read" | "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => {
+            field("file_path").or_else(|| field("notebook_path"))
+        }
+        "Grep" | "Glob" => field("pattern"),
+        "Skill" => field("skill"),
+        "WebFetch" => field("url"),
+        "WebSearch" => field("query"),
+        "Agent" | "Task" => field("description"),
+        _ => None,
+    };
+    let text = text.unwrap_or_else(|| {
+        let compact = input.to_string();
+        if compact == "{}" || compact == "null" {
+            String::new()
+        } else {
+            compact
+        }
+    });
+    truncate(&text.split_whitespace().collect::<Vec<_>>().join(" "), 160)
+}
+
+fn millis_between(start: &str, end: &str) -> Option<i64> {
+    let a = chrono::DateTime::parse_from_rfc3339(start).ok()?;
+    let b = chrono::DateTime::parse_from_rfc3339(end).ok()?;
+    Some((b - a).num_milliseconds().max(0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

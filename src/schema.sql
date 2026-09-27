@@ -88,3 +88,10 @@ CREATE TABLE IF NOT EXISTS friction (
     detail     TEXT
 );
 CREATE INDEX IF NOT EXISTS friction_ts ON friction (ts);
+
+-- Per-session lookups for the session browser.
+CREATE INDEX IF NOT EXISTS prompts_session ON prompts (session_id);
+CREATE INDEX IF NOT EXISTS requests_session ON requests (session_id);
+CREATE INDEX IF NOT EXISTS tool_calls_session ON tool_calls (session_id);
+CREATE INDEX IF NOT EXISTS friction_session ON friction (session_id);
+CREATE INDEX IF NOT EXISTS sessions_started ON sessions (started_at);
