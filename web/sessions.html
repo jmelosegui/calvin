@@ -86,6 +86,18 @@
     .io { margin: -2px 0 10px; padding: 4px 10px 8px; border: 1px solid var(--line-dim); border-top: 0; border-radius: 0 0 8px 8px; }
     .io .lbl { margin-top: 6px; color: var(--muted); font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase; }
     .io pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; }
+    .resume { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+    .resume .lbl { color: var(--muted); font-size: 12px; letter-spacing: 0.15em; text-transform: uppercase; }
+    .resume code {
+      flex: 1; min-width: 0; padding: 8px 12px; border: 1px solid var(--line-dim); border-radius: 8px;
+      font: 500 12.5px "JetBrains Mono", monospace; white-space: nowrap; overflow: auto;
+    }
+    .copy {
+      flex: none; display: grid; place-items: center; width: 34px; height: 34px; padding: 0;
+      border: 1px solid var(--line-dim); border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer;
+    }
+    .copy:hover, .copy.done { color: var(--orange); border-color: var(--orange); }
+    .copy svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
     .interrupt { margin: 6px 0 10px; color: var(--orange-ink); font-size: 13px; font-weight: 600; }
     .foot { margin: 8px 0 0 26px; color: var(--faint); font-size: 12px; }
     .foot b { color: var(--muted); font-weight: 600; }
@@ -209,6 +221,34 @@
       document.querySelectorAll("tr.row").forEach((tr) => (tr.onclick = () => (location.hash = encodeURIComponent(tr.dataset.id))));
     }
 
+    // ---------- resume command ----------
+    const COPY_ICON = `<svg viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>`;
+    const CHECK_ICON = `<svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>`;
+
+    // Claude Code keeps sessions per folder, so resuming means going back to that folder first.
+    function resumeCommand(s) {
+      const resume = `claude --resume ${s.id}`;
+      if (!s.cwd) return resume;
+      if (/^[A-Za-z]:[\\/]/.test(s.cwd) || s.cwd.startsWith("\\\\")) {
+        return `cd '${s.cwd.replace(/'/g, "''")}'; ${resume}`; // PowerShell
+      }
+      return `cd '${s.cwd.replace(/'/g, "'\\''")}' && ${resume}`; // sh, bash, zsh
+    }
+
+    async function copyText(text, button) {
+      try {
+        await navigator.clipboard.writeText(text);
+        button.innerHTML = CHECK_ICON;
+        button.classList.add("done");
+        setTimeout(() => {
+          button.innerHTML = COPY_ICON;
+          button.classList.remove("done");
+        }, 1500);
+      } catch {
+        prompt("Copy this command:", text);
+      }
+    }
+
     // ---------- detail ----------
     let tools = [];
 
@@ -254,9 +294,14 @@
             <div><b>${dur(span(s.started_at, s.ended_at)) || "–"}</b><span>from first to last message</span></div>
             <div><b>${money(s.cost_usd)}</b><span>at API list price${s.subagent_cost_usd ? `, ${money(s.subagent_cost_usd)} of it in subagents` : ""}</span></div>
           </div>
+          <div class="resume" title="Paste into a terminal to pick this session up again in Claude Code">
+            <span class="lbl">Resume</span><code id="resumecmd">${esc(resumeCommand(s))}</code>
+            <button class="copy" id="copyresume" title="Copy command" aria-label="Copy command">${COPY_ICON}</button>
+          </div>
         </section>
         <section class="panel" id="conversation">${html || `<div class="empty">This session has no stored conversation.</div>`}</section></main>`;
 
+      $("#copyresume").onclick = (e) => copyText(resumeCommand(s), e.currentTarget);
       $("#conversation").onclick = (e) => {
         const more = e.target.closest(".you.more");
         if (more) { more.classList.remove("more"); return; }
