@@ -21,9 +21,13 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
 use crate::insights::{self, CostBy, Since};
-use crate::{db, ingest, prices::PriceTable, skills, update};
+use crate::{db, ingest, pack, prices::PriceTable, skills, update};
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
+const SKILLS_HTML: &str = include_str!("../web/skills.html");
+const STYLE_CSS: &str = include_str!("../web/style.css");
+/// SKILL.md previews are cut off beyond this.
+const PREVIEW_BYTES: usize = 200 * 1024;
 const LOGO_SVG: &str = include_str!("../assets/logo.svg");
 const FONTS: &[(&str, &[u8])] = &[
     (
@@ -120,6 +124,16 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/logo.svg",
             get(|| async { ([(header::CONTENT_TYPE, "image/svg+xml")], LOGO_SVG) }),
         )
+        .route("/skills", get(|| async { html(SKILLS_HTML) }))
+        .route(
+            "/style.css",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+                    STYLE_CSS,
+                )
+            }),
+        )
         .route("/fonts/{name}", get(font))
         .route("/api/health", get(|| async { "ok" }))
         .route("/api/status", get(status))
@@ -127,6 +141,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/summary", get(summary))
         .route("/api/cost", get(cost))
         .route("/api/skills", get(skill_usage))
+        .route("/api/skills/detail", get(skill_detail))
+        .route("/api/skills/pack", get(skill_pack))
         .route("/api/prompts", get(prompts))
         .route("/api/friction", get(friction))
         .route("/api/cache", get(cache))
@@ -189,6 +205,10 @@ pub async fn sync_loop(st: Arc<AppState>) {
             _ = st.stopped() => return,
         }
     }
+}
+
+fn html(body: &'static str) -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], body)
 }
 
 async fn font(axum::extract::Path(name): axum::extract::Path<String>) -> Response {
@@ -256,6 +276,8 @@ where
 #[derive(Deserialize)]
 struct Params {
     since: Option<String>,
+    name: Option<String>,
+    names: Option<String>,
     by: Option<String>,
     min: Option<i64>,
     limit: Option<i64>,
@@ -341,6 +363,116 @@ async fn skill_usage(
         insights::skill_usage(c, &since, &installed)
     })
     .await
+}
+
+fn installed_skills(st: &AppState, conn: &Connection) -> Result<Vec<skills::InstalledSkill>> {
+    Ok(skills::installed(
+        &st.claude_dir,
+        &insights::project_dirs(conn)?,
+        &st.extra_skill_paths,
+    ))
+}
+
+#[derive(Serialize)]
+struct SkillDetail {
+    skill: skills::InstalledSkill,
+    usage: Option<insights::SkillUsage>,
+    plan: pack::PackPlan,
+    skill_md: String,
+    skill_md_truncated: bool,
+}
+
+async fn skill_detail(
+    State(st): State<Arc<AppState>>,
+    Query(p): Query<Params>,
+) -> ApiResult<SkillDetail> {
+    let Some(name) = p.name.clone() else {
+        return Err(ApiError(StatusCode::BAD_REQUEST, "missing ?name=".into()));
+    };
+    let s = st.clone();
+    read(&st, move |c| {
+        let installed = installed_skills(&s, c)?;
+        let skill = installed
+            .iter()
+            .find(|k| k.name == name)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no installed skill named '{name}'"))?;
+        let usage = insights::skill_usage(c, &Since::all(), &installed)?
+            .into_iter()
+            .find(|u| u.name == name);
+        let plan = pack::plan(&skill)?;
+        let text = std::fs::read_to_string(&skill.path).unwrap_or_default();
+        let truncated = text.len() > PREVIEW_BYTES;
+        let skill_md = if truncated {
+            let cut = (0..=PREVIEW_BYTES)
+                .rev()
+                .find(|i| text.is_char_boundary(*i))
+                .unwrap_or(0);
+            text[..cut].to_string()
+        } else {
+            text
+        };
+        Ok(SkillDetail {
+            skill,
+            usage,
+            plan,
+            skill_md,
+            skill_md_truncated: truncated,
+        })
+    })
+    .await
+}
+
+/// Download a zip of the selected skills (`?names=a,b`). Only installed skills can be
+/// packed, so this can never be used to read arbitrary paths.
+async fn skill_pack(State(st): State<Arc<AppState>>, Query(p): Query<Params>) -> Response {
+    let names: Vec<String> = p
+        .names
+        .as_deref()
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(str::to_string)
+        .collect();
+    if names.is_empty() {
+        return ApiError(StatusCode::BAD_REQUEST, "missing ?names=".into()).into_response();
+    }
+    let s = st.clone();
+    let result = tokio::task::spawn_blocking(move || -> Result<(String, Vec<u8>)> {
+        let conn = db::open_read(&s.db_path)?;
+        let installed = installed_skills(&s, &conn)?;
+        let mut plans = Vec::new();
+        for name in &names {
+            let skill = installed
+                .iter()
+                .find(|k| &k.name == name)
+                .ok_or_else(|| anyhow::anyhow!("no installed skill named '{name}'"))?;
+            plans.push(pack::plan(skill)?);
+        }
+        let file = match plans.as_slice() {
+            [one] => format!("{}.zip", one.folder),
+            many => format!("skills-{}.zip", many.len()),
+        };
+        let bytes = pack::write_zip(&plans, std::io::Cursor::new(Vec::new()))?.into_inner();
+        Ok((file, bytes))
+    })
+    .await;
+    match result {
+        Ok(Ok((file, bytes))) => (
+            [
+                (header::CONTENT_TYPE, "application/zip".to_string()),
+                (
+                    header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{file}\""),
+                ),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Ok(Err(e)) => ApiError(StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
+        Err(e) => ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
 }
 
 async fn prompts(

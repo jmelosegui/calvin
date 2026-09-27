@@ -108,3 +108,31 @@ async fn summary_is_json_from_the_database() {
         .unwrap();
     assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn pack_only_accepts_installed_skill_names() {
+    let (_tmp, app) = app();
+    for path in [
+        "/api/skills/pack?names=../../etc",
+        "/api/skills/pack?names=not-a-skill",
+        "/api/skills/pack",
+        "/api/skills/detail?name=C:%5CWindows",
+    ] {
+        let res = app
+            .clone()
+            .oneshot(get(path, "127.0.0.1:1982"))
+            .await
+            .unwrap();
+        assert!(
+            res.status().is_client_error() || res.status().is_server_error(),
+            "{path} → {}",
+            res.status()
+        );
+        assert_ne!(
+            res.headers()
+                .get("content-type")
+                .map(|v| v.to_str().unwrap()),
+            Some("application/zip")
+        );
+    }
+}

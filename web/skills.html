@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>calvin · Skills</title>
+  <link rel="icon" type="image/svg+xml" href="/logo.svg" />
+  <link rel="stylesheet" href="/style.css" />
+  <style>
+    .search {
+      width: 260px; padding: 10px 14px; border: 1.5px solid var(--line-dim); border-radius: 8px;
+      background: transparent; color: var(--text); font: 500 14px "Outfit", sans-serif;
+    }
+    .search:focus { outline: none; border-color: var(--orange); }
+
+    .list { display: grid; gap: 0; }
+    .row {
+      display: grid; grid-template-columns: 22px minmax(0, 1fr) 70px 74px; align-items: center; gap: 12px;
+      padding: 10px 8px; border-bottom: 1px dashed var(--line-dim); cursor: pointer; border-radius: 6px;
+    }
+    .row:hover { background: var(--btn); }
+    .row.current { background: var(--btn); box-shadow: inset 3px 0 0 var(--orange); }
+    .row input { accent-color: var(--orange); width: 16px; height: 16px; cursor: pointer; }
+    .row .nm { font-size: 15px; font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .row .nm small { margin-left: 6px; color: var(--muted); font-weight: 500; font-size: 12px; }
+    .row .desc { color: var(--muted); font-size: 12px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .row .uses { text-align: right; font: 700 14px "JetBrains Mono", monospace; }
+    .row .uses.zero { color: var(--faint); font-weight: 500; }
+    .row .last { text-align: right; color: var(--muted); font-size: 12px; }
+    .head { cursor: default; font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted); }
+    .head:hover { background: none; }
+
+    .detail { position: sticky; top: 16px; align-self: start; max-height: calc(100vh - 32px); overflow: auto; }
+    .badge { display: inline-block; padding: 2px 8px; border: 1.5px solid var(--line-dim); border-radius: 6px; font-size: 12px; color: var(--muted); }
+    .stats { display: flex; flex-wrap: wrap; gap: 28px; margin: 16px 0; }
+    .stats div b { display: block; font-size: 24px; font-weight: 700; }
+    .stats div span { font-size: 12px; color: var(--muted); }
+    .path { font: 500 12px "JetBrains Mono", monospace; color: var(--faint); overflow-wrap: anywhere; }
+    h3 { margin: 22px 0 8px; font-size: 14px; font-weight: 600; }
+
+    .files { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .files td { padding: 6px 4px; border-bottom: 1px dashed var(--line-dim); vertical-align: top; }
+    .files td:first-child { font-family: "JetBrains Mono", monospace; font-size: 12px; overflow-wrap: anywhere; }
+    .files td.size { text-align: right; white-space: nowrap; color: var(--muted); }
+    .files tr.out td:first-child { color: var(--faint); }
+    .files tr.out .p { text-decoration: line-through; }
+    .files .note { display: block; margin-top: 2px; font-family: "Outfit", sans-serif; color: var(--muted); }
+    .files tr.warn .note { color: var(--orange-ink); }
+
+    .md {
+      margin: 0; max-height: 420px; overflow: auto; padding: 14px 16px; border: 1.5px solid var(--line-dim); border-radius: 10px;
+      white-space: pre-wrap; font: 500 12.5px/1.6 "JetBrains Mono", monospace; color: var(--text);
+    }
+    .warnbox { margin: 14px 0 0; padding: 10px 14px; border: 1.5px solid var(--orange); border-radius: 8px; font-size: 13px; }
+    .warnbox b { color: var(--orange-ink); }
+
+    .packbar {
+      position: sticky; bottom: 0; z-index: 5; display: none; align-items: center; gap: 16px;
+      max-width: 1452px; margin: 0 auto; padding: 14px 20px; border: 1.5px solid var(--orange);
+      border-radius: 12px 12px 0 0; background: var(--surface); font-size: 14px;
+    }
+    .packbar.show { display: flex; }
+    .packbar .grow { flex: 1; color: var(--muted); }
+    .packbar .grow b { color: var(--text); }
+  </style>
+</head>
+<body>
+  <header class="top">
+    <svg class="logo" viewBox="0 0 64 64" aria-label="calvin">
+      <line class="ln" x1="32" y1="15" x2="32" y2="8" />
+      <circle class="or" cx="32" cy="7" r="3.5" />
+      <rect class="ln" x="9" y="16" width="46" height="38" rx="11" />
+      <circle class="or" cx="32" cy="35" r="11" />
+      <circle class="pupil" cx="35.5" cy="31.5" r="3.4" />
+    </svg>
+    <nav class="nav"><a href="/">Prime Radiant</a><a href="/skills" class="active">Skills</a></nav>
+    <button class="icon-btn" id="theme" title="Toggle theme (T)">◐</button>
+  </header>
+
+  <div class="titlebar">
+    <h1>Skill <span class="px">LIBRARY</span></h1>
+    <div class="actions">
+      <input class="search" id="q" type="search" placeholder="Search skills  ( / )" autocomplete="off" />
+      <div class="seg" id="source">
+        <button data-source="" class="active">All</button>
+        <button data-source="user">Mine</button>
+        <button data-source="project">Project</button>
+        <button data-source="plugin">Plugins</button>
+      </div>
+    </div>
+  </div>
+
+  <main>
+    <section class="panel span-5">
+      <h2>Installed skills</h2>
+      <p class="sub">Tick skills to pack them into one zip for a colleague. Click a row for details.</p>
+      <div class="list" id="list"></div>
+    </section>
+
+    <section class="panel span-7 detail" id="detail">
+      <div class="empty">Pick a skill on the left to see what it does, how often it runs, and exactly which files would be shared.</div>
+    </section>
+  </main>
+
+  <div class="packbar" id="packbar">
+    <span class="grow" id="packinfo"></span>
+    <button class="btn" id="clear">Clear</button>
+    <button class="btn primary" id="pack">Pack</button>
+  </div>
+
+  <footer id="footer">Skills are read from your folders and never changed. Packages download to your browser.</footer>
+
+  <script>
+    const $ = (s) => document.querySelector(s);
+    const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+    const bytes = (n) => (n >= 1 << 20 ? (n / (1 << 20)).toFixed(1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " KB" : n + " B");
+    const day = (ts) => (ts ? ts.slice(0, 10) : "never");
+    async function api(path) {
+      const r = await fetch(path);
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `${r.status}`);
+      return r.json();
+    }
+
+    let skills = [];
+    let source = "";
+    let current = null;
+    const selected = new Set();
+    const details = new Map(); // name → /api/skills/detail response
+
+    const SOURCE = { user: "mine", project: "project", plugin: "plugin", extra: "extra" };
+
+    function renderList() {
+      const q = $("#q").value.trim().toLowerCase();
+      const rows = skills.filter((s) => s.installed)
+        .filter((s) => !source || s.source === source)
+        .filter((s) => !q || s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q));
+      $("#list").innerHTML =
+        `<div class="row head"><span></span><span>Skill</span><span style="text-align:right">Runs</span><span style="text-align:right">Last used</span></div>` +
+        (rows.length
+          ? rows.map((s) => {
+              const n = s.model_runs + s.command_runs;
+              return `<div class="row ${s.name === current ? "current" : ""}" data-name="${esc(s.name)}">
+                <input type="checkbox" ${selected.has(s.name) ? "checked" : ""} aria-label="Select ${esc(s.name)}" />
+                <div><div class="nm">${esc(s.name)}<small>${SOURCE[s.source] ?? esc(s.source)}</small></div><div class="desc">${esc(s.description)}</div></div>
+                <span class="uses ${n ? "" : "zero"}" title="model ran it ${s.model_runs}× · you ran it ${s.command_runs}×">${n}</span>
+                <span class="last">${day(s.last_used)}</span>
+              </div>`;
+            }).join("")
+          : `<div class="empty">No skills match.</div>`);
+    }
+
+    async function getDetail(name) {
+      if (!details.has(name)) details.set(name, await api(`/api/skills/detail?name=${encodeURIComponent(name)}`));
+      return details.get(name);
+    }
+
+    async function showDetail(name) {
+      current = name;
+      history.replaceState(null, "", `#${encodeURIComponent(name)}`);
+      renderList();
+      const box = $("#detail");
+      try {
+        const d = await getDetail(name);
+        if (current !== name) return;
+        const u = d.usage ?? { model_runs: 0, command_runs: 0, last_used: null };
+        const p = d.plan;
+        const nIn = p.files.filter((f) => f.included).length;
+        const files = p.files.map((f) => {
+          const cls = !f.included ? "out" : f.note ? "warn" : "";
+          const note = f.note ? `<span class="note">${!f.included ? "left out: " : "check: "}${esc(f.note)}</span>` : "";
+          return `<tr class="${cls}"><td><span class="p">${esc(f.path)}</span>${note}</td><td class="size">${bytes(f.bytes)}</td></tr>`;
+        }).join("");
+        const warn = p.warnings.length
+          ? `<div class="warnbox"><b>Check before sharing:</b> ${p.warnings.map(esc).join("; ")}</div>`
+          : "";
+        box.innerHTML = `
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+            <h2 style="margin:0">${esc(d.skill.name)}</h2><span class="badge">${SOURCE[d.skill.source] ?? esc(d.skill.source)}</span>
+            <button class="btn primary" id="packone" style="margin-left:auto">Pack this skill</button>
+          </div>
+          <p class="sub" style="margin-top:8px">${esc(d.skill.description) || "No description."}</p>
+          <div class="path">${esc(p.dir)}</div>
+          <div class="stats">
+            <div><b>${u.model_runs}</b><span>times the model chose it</span></div>
+            <div><b>${u.command_runs}</b><span>times you ran /${esc(d.skill.name)}</span></div>
+            <div><b>${day(u.last_used)}</b><span>last used</span></div>
+            <div><b>${bytes(p.included_bytes)}</b><span>to share (${nIn} file${nIn === 1 ? "" : "s"})</span></div>
+          </div>
+          ${u.model_runs === 0 && u.command_runs > 0 ? `<div class="warnbox">You run this yourself, but the model has never picked it. Its description probably doesn't match how you ask for it.</div>` : ""}
+          ${warn}
+          <h3>What gets shared</h3>
+          <table class="files">${files}</table>
+          ${p.excluded_bytes ? `<p class="sub" style="margin-top:8px">${bytes(p.excluded_bytes)} left out.</p>` : ""}
+          <h3>SKILL.md</h3>
+          <pre class="md">${esc(d.skill_md)}${d.skill_md_truncated ? "\n\n… (preview cut off)" : ""}</pre>`;
+        $("#packone").onclick = () => pack([name]);
+      } catch (e) {
+        box.innerHTML = `<div class="empty error">${esc(e.message)}</div>`;
+      }
+    }
+
+    async function renderPackbar() {
+      const bar = $("#packbar");
+      if (!selected.size) {
+        bar.classList.remove("show");
+        return;
+      }
+      bar.classList.add("show");
+      $("#pack").textContent = `Pack ${selected.size} skill${selected.size === 1 ? "" : "s"}`;
+      $("#packinfo").innerHTML = `<b>${selected.size}</b> selected · working out size…`;
+      try {
+        const ds = await Promise.all([...selected].map(getDetail));
+        const size = ds.reduce((t, d) => t + d.plan.included_bytes, 0);
+        const warns = ds.reduce((t, d) => t + d.plan.warnings.length, 0);
+        $("#packinfo").innerHTML = `<b>${selected.size}</b> selected · ${bytes(size)}` + (warns ? ` · <span class="error">${warns} file${warns === 1 ? "" : "s"} to check</span>` : "");
+      } catch (e) {
+        $("#packinfo").innerHTML = `<span class="error">${esc(e.message)}</span>`;
+      }
+    }
+
+    async function pack(names) {
+      try {
+        const ds = await Promise.all(names.map(getDetail));
+        const warnings = ds.flatMap((d) => d.plan.warnings.map((w) => `${d.skill.name}: ${w}`));
+        if (warnings.length && !confirm(`These files might contain secrets:\n\n${warnings.join("\n")}\n\nPack them anyway?`)) return;
+        const url = `/api/skills/pack?names=${encodeURIComponent(names.join(","))}`;
+        const r = await fetch(url);
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `${r.status}`);
+        const blob = await r.blob();
+        const name = (r.headers.get("content-disposition") ?? "").match(/filename="([^"]+)"/)?.[1] ?? "skills.zip";
+        const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: name });
+        a.click();
+        URL.revokeObjectURL(a.href);
+        $("#footer").textContent = `Downloaded ${name} (${bytes(blob.size)}). Send it to your colleague with the INSTALL.md inside.`;
+      } catch (e) {
+        alert(`Couldn't pack: ${e.message}`);
+      }
+    }
+
+    $("#list").addEventListener("click", (e) => {
+      const row = e.target.closest(".row[data-name]");
+      if (!row) return;
+      const name = row.dataset.name;
+      if (e.target.matches("input[type=checkbox]")) {
+        e.target.checked ? selected.add(name) : selected.delete(name);
+        renderPackbar();
+        return;
+      }
+      showDetail(name);
+    });
+    $("#q").addEventListener("input", renderList);
+    document.querySelectorAll("#source button").forEach((b) =>
+      b.addEventListener("click", () => {
+        source = b.dataset.source;
+        document.querySelectorAll("#source button").forEach((x) => x.classList.toggle("active", x === b));
+        renderList();
+      }));
+    $("#pack").onclick = () => pack([...selected]);
+    $("#clear").onclick = () => {
+      selected.clear();
+      renderList();
+      renderPackbar();
+    };
+    const toggleTheme = () => {
+      const r = document.documentElement;
+      r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+      localStorage.setItem("calvin-theme", r.dataset.theme);
+    };
+    $("#theme").onclick = toggleTheme;
+    document.addEventListener("keydown", (e) => {
+      if (e.target.closest("input, textarea")) return;
+      if (e.key === "/") { e.preventDefault(); $("#q").focus(); }
+      else if (e.key.toLowerCase() === "t") toggleTheme();
+    });
+    document.documentElement.dataset.theme = localStorage.getItem("calvin-theme") ?? "dark";
+
+    (async () => {
+      try {
+        skills = await api("/api/skills?since=all");
+        skills.sort((a, b) => b.model_runs + b.command_runs - (a.model_runs + a.command_runs) || a.name.localeCompare(b.name));
+        renderList();
+        const wanted = decodeURIComponent(location.hash.slice(1));
+        if (wanted && skills.some((s) => s.name === wanted)) showDetail(wanted);
+      } catch (e) {
+        $("#list").innerHTML = `<div class="empty error">${esc(e.message)}</div>`;
+      }
+    })();
+  </script>
+</body>
+</html>

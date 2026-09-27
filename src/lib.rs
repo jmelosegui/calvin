@@ -8,6 +8,7 @@ pub mod doctor;
 pub mod event;
 pub mod ingest;
 pub mod insights;
+pub mod pack;
 pub mod prices;
 pub mod report;
 pub mod server;
