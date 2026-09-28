@@ -161,6 +161,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/prompts", get(prompts))
         .route("/api/friction", get(friction))
         .route("/api/cache", get(cache))
+        .route("/api/models", get(models))
         .route("/api/live", get(live))
         .layer(middleware::from_fn_with_state(state.clone(), local_only))
         .with_state(state)
@@ -621,6 +622,14 @@ async fn cache(
 ) -> ApiResult<Vec<insights::CacheRow>> {
     let since = p.since()?;
     read(&st, move |c| insights::cache(c, &since)).await
+}
+
+async fn models(
+    State(st): State<Arc<AppState>>,
+    Query(p): Query<Params>,
+) -> ApiResult<Vec<insights::ModelRow>> {
+    let since = p.since()?;
+    read(&st, move |c| insights::models(c, &since)).await
 }
 
 async fn live(

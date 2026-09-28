@@ -232,3 +232,15 @@ fn background_task_notifications_are_not_prompts() {
         0
     );
 }
+
+#[test]
+fn model_usage_per_model() {
+    let (_tmp, claude) = fixture();
+    let mut conn = db::open_in_memory().unwrap();
+    ingest(&mut conn, &claude);
+    let rows = insights::models(&conn, &Since::all()).unwrap();
+    let names: Vec<_> = rows.iter().map(|r| r.model.as_str()).collect();
+    assert_eq!(names, vec!["claude-opus-5", "claude-haiku-4-5-20251001"]);
+    assert_eq!((rows[0].requests, rows[0].output_tokens), (2, 101));
+    assert_eq!(rows[1].requests, 1);
+}

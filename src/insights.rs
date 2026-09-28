@@ -487,6 +487,53 @@ pub fn recent_activity(conn: &Connection, limit: i64) -> Result<Vec<Activity>> {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ModelRow {
+    pub model: String,
+    pub requests: i64,
+    /// Requests made by subagents rather than the main conversation.
+    pub subagent_requests: i64,
+    pub sessions: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read: i64,
+    pub cache_write: i64,
+    pub cost_usd: f64,
+    pub cache_hit_rate: Option<f64>,
+}
+
+/// Usage per model, most expensive first.
+pub fn models(conn: &Connection, since: &Since) -> Result<Vec<ModelRow>> {
+    let rows = conn
+        .prepare(
+            "SELECT model, COUNT(*), COALESCE(SUM(is_sidechain), 0), COUNT(DISTINCT session_id),
+                    COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
+                    COALESCE(SUM(cache_read), 0), COALESCE(SUM(cache_write_5m + cache_write_1h), 0),
+                    COALESCE(SUM(cost_usd), 0)
+             FROM requests WHERE ts >= ?1 AND model IS NOT NULL
+             GROUP BY model ORDER BY 9 DESC, 2 DESC",
+        )?
+        .query_map([&since.0], |r| {
+            let input: i64 = r.get(4)?;
+            let read: i64 = r.get(6)?;
+            let write: i64 = r.get(7)?;
+            Ok(ModelRow {
+                model: r.get(0)?,
+                requests: r.get(1)?,
+                subagent_requests: r.get(2)?,
+                sessions: r.get(3)?,
+                input_tokens: input,
+                output_tokens: r.get(5)?,
+                cache_read: read,
+                cache_write: write,
+                cost_usd: r.get(8)?,
+                cache_hit_rate: ratio(Some(read), Some(read + write + input)),
+            })
+        })?
+        .collect::<Result<_, _>>()?;
+    Ok(rows)
+}
+
+#[derive(Debug, Serialize)]
 pub struct SessionRow {
     pub id: String,
     pub title: Option<String>,

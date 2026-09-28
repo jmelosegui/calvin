@@ -74,6 +74,13 @@
       <p class="sub">Moments you stopped, corrected or overruled the agent.</p>
       <div class="hbars" id="friction"></div>
     </section>
+
+    <section class="panel">
+      <h2>Models</h2>
+      <p class="sub">Which models did the work, and what each cost. Subagents often do simpler work that a cheaper model can handle.</p>
+      <div class="hbars" id="models"></div>
+      <p class="never" id="modelnote"></p>
+    </section>
   </main>
 
   <footer id="footer">Loading…</footer>
@@ -261,6 +268,46 @@
         .join("");
     }
 
+    // "claude-haiku-4-5-20251001" → "Haiku 4.5"
+    function modelName(id) {
+      const m = id.match(/claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$/);
+      if (!m) return id;
+      const family = m[1][0].toUpperCase() + m[1].slice(1);
+      return `${family} ${m[2]}${m[3] ? "." + m[3] : ""}`;
+    }
+
+    function renderModels(rows) {
+      if (!rows.length) {
+        $("#models").innerHTML = `<div class="empty">No model requests in this period.</div>`;
+        $("#modelnote").textContent = "";
+        return;
+      }
+      const max = Math.max(...rows.map((r) => r.cost_usd), 1e-9);
+      const total = rows.reduce((t, r) => t + r.cost_usd, 0);
+      const requests = rows.reduce((t, r) => t + r.requests, 0);
+      $("#models").innerHTML = rows.map((r, i) => {
+        const share = total ? Math.round((r.cost_usd / total) * 100) : 0;
+        const sub = r.subagent_requests ? ` (${Math.round((r.subagent_requests / r.requests) * 100)}% by subagents)` : "";
+        const cache = r.cache_hit_rate == null ? "" : ` · ${Math.round(r.cache_hit_rate * 100)}% cache hits`;
+        return `
+          <div class="hbar">
+            <div class="name ${i ? "dim" : ""}" title="${esc(r.model)}">${esc(modelName(r.model))} <span style="color:var(--faint);font-weight:500">· ${share}% of spend</span></div>
+            <div class="row">
+              <div class="box ${i ? "" : "hot"}" style="width:${(r.cost_usd / max) * 55}%"></div>
+              <div class="track"></div>
+              <div class="val">${money(r.cost_usd)}</div>
+            </div>
+            <div class="sub" style="margin:4px 0 0">${num(r.requests)} requests${sub} · ${tok(r.output_tokens)} output tokens · ${num(r.sessions)} session${r.sessions === 1 ? "" : "s"}${cache}</div>
+          </div>`;
+      }).join("");
+      // The biggest lever: expensive models doing subagent work.
+      const top = rows[0];
+      const subShare = top.requests ? top.subagent_requests / top.requests : 0;
+      $("#modelnote").innerHTML = subShare >= 0.2 && rows.length
+        ? `<b>${Math.round(subShare * 100)}% of ${esc(modelName(top.model))} requests came from subagents.</b> Subagents often search, read and summarise; giving them a cheaper model (in the agent's definition, or with <code>CLAUDE_CODE_SUBAGENT_MODEL</code>) could cut spend noticeably.`
+        : `${num(requests)} model requests in this period.`;
+    }
+
     function renderFriction(f) {
       const label = { interrupted: "You interrupted the agent", rejected: "You rejected a tool call", denied: "Blocked by a rule or classifier" };
       const rows = f.by_kind.map((r) => [label[r.kind] ?? r.kind, r.count]);
@@ -273,13 +320,14 @@
     async function load() {
       const since = `since=${range}d`;
       try {
-        const [summary, cost, skills, prompts, projects, friction] = await Promise.all([
+        const [summary, cost, skills, prompts, projects, friction, models] = await Promise.all([
           api(`/api/summary?${since}`),
           api(`/api/cost?by=day&${since}`),
           api(`/api/skills?${since}`),
           api(`/api/prompts?min=3&limit=6&${since}`),
           api(`/api/cost?by=project&${since}`),
           api(`/api/friction?${since}`),
+          api(`/api/models?${since}`),
         ]);
         renderKpis(summary, skills);
         renderCost(cost);
@@ -287,6 +335,7 @@
         renderPrompts(prompts);
         hbars("#projects", projects.slice(0, 6).map((r) => [r.key, r.cost_usd]), money, "No spend in this period.");
         renderFriction(friction);
+        renderModels(models);
       } catch (e) {
         $("#footer").innerHTML = `<span class="error">${esc(e.message)}</span>`;
       }
