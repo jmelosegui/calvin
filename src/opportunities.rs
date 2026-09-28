@@ -83,14 +83,17 @@ pub fn run(conn: &Connection, since: &Since, ctx: &Context) -> Result<Vec<Opport
         status_line(&settings),
     ];
     out.retain(|o| !o.title.is_empty());
-    // Actions first, biggest saving first, then the rest in a stable order.
+    // Actions first, biggest saving first, then by id: the same inputs always give the
+    // same order.
     out.sort_by(|a, b| {
-        a.status.cmp(&b.status).then(
-            b.saving_usd
-                .unwrap_or(0.0)
-                .partial_cmp(&a.saving_usd.unwrap_or(0.0))
-                .unwrap_or(std::cmp::Ordering::Equal),
-        )
+        a.status
+            .cmp(&b.status)
+            .then(
+                b.saving_usd
+                    .unwrap_or(0.0)
+                    .total_cmp(&a.saving_usd.unwrap_or(0.0)),
+            )
+            .then(a.id.cmp(b.id))
     });
     Ok(out)
 }
@@ -322,7 +325,8 @@ fn subagent_model(
     let mut stmt = conn.prepare(
         "SELECT model, COUNT(*), SUM(input_tokens), SUM(output_tokens), SUM(cache_read),
                 SUM(cache_write_5m), SUM(cache_write_1h), COALESCE(SUM(cost_usd), 0)
-         FROM requests WHERE is_sidechain = 1 AND ts >= ?1 AND model IS NOT NULL GROUP BY model",
+         FROM requests WHERE is_sidechain = 1 AND ts >= ?1 AND model IS NOT NULL
+         GROUP BY model ORDER BY model",
     )?;
     let (mut premium_requests, mut all_requests, mut premium_cost, mut as_sonnet) =
         (0i64, 0i64, 0.0, 0.0);
@@ -717,7 +721,8 @@ fn permission_friction(conn: &Connection, since: &Since) -> Result<Opportunity> 
         *groups.entry((what, kind)).or_default() += 1;
     }
     let mut repeated: Vec<_> = groups.into_iter().filter(|(_, n)| *n >= 2).collect();
-    repeated.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+    // Most frequent first; ties by name, so the order never depends on hash-map order.
+    repeated.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     if repeated.is_empty() {
         return Ok(skip());
     }
@@ -857,7 +862,7 @@ fn plan_mode(conn: &Connection, since: &Since) -> Result<Opportunity> {
     if big.is_empty() && planned_big == 0 {
         return Ok(skip());
     }
-    big.sort_by(|a, b| b.4.partial_cmp(&a.4).unwrap_or(std::cmp::Ordering::Equal));
+    big.sort_by(|a, b| b.4.total_cmp(&a.4).then_with(|| a.0.cmp(&b.0)));
     let total = big.len() + planned_big;
     Ok(Opportunity {
         id: "plan-mode",
@@ -889,8 +894,8 @@ fn long_sessions(conn: &Connection, since: &Since) -> Result<Opportunity> {
     }
     heavy.sort_by(|a, b| {
         b.cost_usd
-            .partial_cmp(&a.cost_usd)
-            .unwrap_or(std::cmp::Ordering::Equal)
+            .total_cmp(&a.cost_usd)
+            .then_with(|| a.id.cmp(&b.id))
     });
     let heavy_cost: f64 = heavy.iter().map(|s| s.cost_usd).sum();
     Ok(Opportunity {
