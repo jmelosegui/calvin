@@ -136,14 +136,6 @@ The most useful contribution is a new harness adapter. Adapters ship with **hand
 anonymised fixtures**. Never commit or attach real transcripts; use `calvin export --redact`
 when filing issues. Details in `CONTRIBUTING.md` (coming).
 
-## Repository layout
-
-```
-assets/logo.svg            the logo (adapts to light and dark mode)
-prototype/dashboard.html   dashboard mock-up with demo data (open in a browser)
-prototype/logos.html       logo options that were considered
-```
-
 ## License
 
 Licensed under the [MIT License](LICENSE).

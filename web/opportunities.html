@@ -111,6 +111,10 @@
     .past button { display: block; width: 100%; text-align: left; padding: 7px 0; border: 0; border-bottom: 1px dashed var(--line-dim); background: none; color: var(--text); font: 500 13px "Outfit", sans-serif; cursor: pointer; }
     .past button:hover { color: var(--orange-ink); }
     .past button span { color: var(--muted); margin-left: 8px; font-size: 12px; }
+    .past button::before { content: "B8"; display: inline-block; width: 16px; color: var(--faint); transition: transform 0.15s; }
+    .past button.expanded::before { transform: rotate(90deg); color: var(--orange); }
+    .past button.expanded { color: var(--orange-ink); }
+    .pastplan { margin: 0 0 12px; padding: 12px 16px 4px 16px; border-left: 2px solid var(--orange); background: var(--btn); border-radius: 0 8px 8px 0; }
     dialog { max-width: 900px; width: 90vw; max-height: 80vh; padding: 0; border: 1.5px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--text); }
     dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
     dialog .dh { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--line-dim); }
@@ -448,13 +452,15 @@
       $("#past").innerHTML = rows.length
         ? `<h4>Earlier plans</h4>${rows.map((r) => `<button data-id="${r.id}">${esc(new Date(r.created_at).toLocaleString())}<span>${esc(r.model ?? "")} · last ${esc(r.since)}${r.cost_usd != null ? ` · $${r.cost_usd.toFixed(3)}` : ""}${r.status !== "done" ? " · failed" : ""}</span></button>`).join("")}`
         : "";
+      // Each earlier plan expands under its own row, one at a time; click again to collapse.
       document.querySelectorAll("#past button").forEach((b) => (b.onclick = async () => {
+        const wasOpen = b.classList.contains("expanded");
+        document.querySelectorAll("#past .pastplan").forEach((p) => p.remove());
+        document.querySelectorAll("#past button.expanded").forEach((x) => x.classList.remove("expanded"));
+        if (wasOpen) return;
         const r = await fetch(`/api/advisor/report?id=${b.dataset.id}`).then((x) => x.json());
-        $("#progress").classList.remove("show");
-        const plan = $("#plan");
-        plan.classList.toggle("error", r.status !== "done");
-        plan.innerHTML = `<div class="meta">Plan from ${esc(new Date(r.created_at).toLocaleString())} · ${esc(r.model ?? "")} · last ${esc(r.since)}</div>` + (r.report ? md(r.report) : esc(r.error ?? ""));
-        plan.scrollIntoView({ behavior: "smooth", block: "start" });
+        b.insertAdjacentHTML("afterend", `<div class="plan pastplan ${r.status !== "done" ? "error" : ""}">${r.report ? md(r.report) : esc(r.error ?? "")}</div>`);
+        b.classList.add("expanded");
       }));
     }
 
