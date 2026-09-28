@@ -212,3 +212,23 @@ fn reingest_reads_only_new_complete_lines() {
     );
     assert_eq!(count(&conn, "SELECT COUNT(*) FROM raw_chunks"), 2);
 }
+
+#[test]
+fn background_task_notifications_are_not_prompts() {
+    let (_tmp, claude) = fixture();
+    let mut f = OpenOptions::new()
+        .append(true)
+        .open(log_file(&claude))
+        .unwrap();
+    writeln!(
+        f,
+        r#"{{"type":"user","sessionId":"{SESSION}","uuid":"u50","timestamp":"2026-09-01T11:05:00.000Z","message":{{"role":"user","content":"<task-notification>\n<task-id>abc</task-id>\n<status>completed</status>\n</task-notification>"}}}}"#
+    )
+    .unwrap();
+    let mut conn = db::open_in_memory().unwrap();
+    ingest(&mut conn, &claude);
+    assert_eq!(
+        count(&conn, "SELECT COUNT(*) FROM prompts WHERE id = 'u50'"),
+        0
+    );
+}

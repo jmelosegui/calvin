@@ -98,6 +98,29 @@
     }
     .copy:hover, .copy.done { color: var(--orange); border-color: var(--orange); }
     .copy svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .only { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 14px; cursor: pointer; }
+    .only input, .fpanel input { accent-color: var(--orange); }
+    a.jump { color: var(--orange-ink); font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+
+    .fpanel { margin-top: 22px; padding-top: 18px; border-top: 1px dashed var(--line-dim); }
+    .fpanel h3 { margin: 0 0 4px; font-size: 16px; }
+    .fpanel h3 small { margin-left: 8px; color: var(--muted); font-size: 13px; font-weight: 500; }
+    .fpanel h3 label { cursor: pointer; }
+    .fps { display: grid; gap: 10px; margin: 12px 0 0; padding: 0; list-style: none; }
+    .fp { padding: 12px 14px; border: 1.5px solid var(--line-dim); border-radius: 10px; cursor: pointer; }
+    .fp:hover { border-color: var(--orange); }
+    .fp.error { display: none; }
+    .fpanel.errors .fp.error { display: block; }
+    .fp-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+    .fp-time { margin-left: auto; color: var(--faint); font: 500 12px "JetBrains Mono", monospace; }
+    .fp-doing { margin-bottom: 6px; font: 500 12.5px "JetBrains Mono", monospace; overflow-wrap: anywhere; }
+    .fp-line { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 10px; margin-top: 3px; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+    .fp-line span { color: var(--faint); font-size: 12px; }
+    .fp-line.next { color: var(--text); }
+    .fp-line.next span { color: var(--orange-ink); }
+    .tool.flag { border-color: var(--orange); }
+    .flash { animation: flash 1.6s ease-out; }
+    @keyframes flash { 0%, 30% { box-shadow: 0 0 0 4px var(--orange); } 100% { box-shadow: 0 0 0 0 transparent; } }
     .interrupt { margin: 6px 0 10px; color: var(--orange-ink); font-size: 13px; font-weight: 600; }
     .foot { margin: 8px 0 0 26px; color: var(--faint); font-size: 12px; }
     .foot b { color: var(--muted); font-weight: 600; }
@@ -171,6 +194,7 @@
           <div class="actions">
             <input class="search" id="q" type="search" placeholder="Search titles and prompts  ( / )" autocomplete="off" />
             <select id="project"><option value="">All projects</option></select>
+            <label class="only"><input type="checkbox" id="onlyfriction" /> With friction only</label>
             <div class="seg" id="range">
               <button data-r="7d">7d</button><button data-r="30d">30d</button><button data-r="90d">90d</button><button data-r="all">All</button>
             </div>
@@ -183,6 +207,7 @@
       });
       $("#q").oninput = renderList;
       $("#project").onchange = renderList;
+      $("#onlyfriction").onchange = renderList;
       api(`/api/sessions?since=${range}`).then((rows) => {
         sessions = rows;
         const projects = [...new Set(rows.map((r) => r.project).filter(Boolean))].sort();
@@ -196,6 +221,7 @@
       const project = $("#project").value;
       const rows = sessions
         .filter((s) => !project || s.project === project)
+        .filter((s) => !$("#onlyfriction").checked || s.friction > 0)
         .filter((s) => !q || [s.title, s.first_prompt, s.project, s.git_branch].some((v) => v && v.toLowerCase().includes(q)));
       if (!rows.length) {
         $("#list").innerHTML = `<div class="empty">No sessions match.</div>`;
@@ -213,12 +239,15 @@
               <td class="proj">${esc(s.project ?? "")}${s.git_branch ? `<small>${esc(s.git_branch)}</small>` : ""}</td>
               <td class="num">${s.prompts}</td>
               <td class="num">${s.tool_calls}</td>
-              <td class="num ${s.friction ? "friction" : "zero"}">${s.friction}</td>
+              <td class="num ${s.friction ? "friction" : "zero"}">${s.friction ? `<a href="#${encodeURIComponent(s.id)}?friction" class="jump" title="Open at the first friction point">${s.friction}</a>` : 0}</td>
               <td class="num">${dur(span(s.started_at, s.ended_at))}</td>
               <td class="num">${money(s.cost_usd)}</td>
             </tr>`).join("")}</tbody>
         </table>`;
-      document.querySelectorAll("tr.row").forEach((tr) => (tr.onclick = () => (location.hash = encodeURIComponent(tr.dataset.id))));
+      document.querySelectorAll("tr.row").forEach((tr) => (tr.onclick = (e) => {
+        if (e.target.closest("a.jump")) return; // the friction link has its own target
+        location.hash = encodeURIComponent(tr.dataset.id);
+      }));
     }
 
     // ---------- resume command ----------
@@ -252,7 +281,79 @@
     // ---------- detail ----------
     let tools = [];
 
-    async function detailView(id) {
+    const FRICTION = {
+      rejected: "You rejected a tool call",
+      denied: "Blocked by a permission rule or the classifier",
+      interrupted: "You interrupted",
+      error: "Tool call failed",
+    };
+    const oneLine = (s, n = 160) => {
+      const flat = String(s ?? "").replace(/\s+/g, " ").trim();
+      return flat.length > n ? flat.slice(0, n) + "…" : flat;
+    };
+
+    /// Every point where the session hit friction, with what led to it and what you said next.
+    function frictionPoints(turns) {
+      const points = [];
+      turns.forEach((t, ti) => {
+        const next = turns.slice(ti + 1).find((x) => x.prompt)?.prompt ?? null;
+        t.items.forEach((i, ii) => {
+          const kind = i.type === "interrupted" ? "interrupted" : i.type === "tool" && ["rejected", "denied", "error"].includes(i.outcome) ? i.outcome : null;
+          if (!kind) return;
+          // What the agent was doing just before an interruption.
+          const before = kind === "interrupted" ? t.items.slice(0, ii).reverse().find((x) => x.type === "tool" || x.type === "text") : i;
+          const doing = !before ? "" : before.type === "tool" ? `${before.name} ${before.summary}` : before.text;
+          points.push({ kind, ts: i.ts, anchor: `f-${ti}-${ii}`, doing: oneLine(doing), prompt: t.prompt, next, detail: i.type === "tool" ? i.result : null });
+        });
+      });
+      return points;
+    }
+
+    // The useful part of a tool result: your own words when you rejected with feedback,
+    // the classifier's reason for a denial, the error text for a failure.
+    function why(p) {
+      const text = String(p.detail ?? "");
+      if (p.kind === "rejected") {
+        const said = text.match(/the user said:\s*([\s\S]+)/i);
+        return said ? said[1] : null;
+      }
+      if (p.kind === "denied") {
+        const reason = text.match(/Reason:\s*([\s\S]+?)(?:\.\s+If you have|$)/);
+        return reason ? reason[1] : text;
+      }
+      return text || null;
+    }
+
+    function frictionPanel(points) {
+      if (!points.length) return "";
+      const main = points.filter((p) => p.kind !== "error");
+      const errors = points.length - main.length;
+      const row = (p) => `
+        <li class="fp ${p.kind}" data-anchor="${p.anchor}">
+          <div class="fp-head"><span class="chip ${p.kind}">${FRICTION[p.kind]}</span><span class="fp-time">${new Date(p.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}</span></div>
+          ${p.doing ? `<div class="fp-doing">${esc(p.doing)}</div>` : ""}
+          ${why(p) ? `<div class="fp-line"><span>${p.kind === "rejected" ? "You said" : p.kind === "denied" ? "Reason" : "Error"}</span>${esc(oneLine(why(p), 220))}</div>` : ""}
+          ${p.prompt ? `<div class="fp-line"><span>While</span>${esc(oneLine(p.prompt))}</div>` : ""}
+          <div class="fp-line next"><span>You then said</span>${p.next ? esc(oneLine(p.next, 220)) : "<i>nothing, the session ended</i>"}</div>
+        </li>`;
+      return `
+        <div class="fpanel">
+          <h3>Friction <small>${main.length} point${main.length === 1 ? "" : "s"}${errors ? ` · <label><input type="checkbox" id="showerrors" /> show ${errors} failed tool call${errors === 1 ? "" : "s"}</label>` : ""}</small></h3>
+          <p class="sub">Click one to jump to it. "You then said" is usually the correction, and the lesson.</p>
+          <ol class="fps">${points.map(row).join("")}</ol>
+        </div>`;
+    }
+
+    function jumpTo(anchor) {
+      const el = document.getElementById(anchor);
+      if (!el) return;
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      el.classList.remove("flash");
+      void el.offsetWidth; // restart the animation
+      el.classList.add("flash");
+    }
+
+    async function detailView(id, focusFriction = false) {
       $("#view").innerHTML = `<main><section class="panel"><div class="empty">Loading the conversation…</div></section></main>`;
       let s;
       try {
@@ -265,16 +366,19 @@
       tools = [];
       const prompts = s.turns.filter((t) => t.prompt).length;
       const toolCount = s.turns.reduce((n, t) => n + t.tool_calls, 0);
-      const html = s.turns.map((t) => {
+      const points = frictionPoints(s.turns);
+      const html = s.turns.map((t, ti) => {
         const you = t.prompt == null ? "" : t.kind === "command"
           ? `<div class="you"><span class="cmd">${esc(t.prompt)}</span></div>`
           : `<div class="you ${t.prompt.length > 900 ? "more" : ""}">${esc(t.prompt)}</div>`;
-        const items = t.items.map((i) => {
+        const items = t.items.map((i, ii) => {
+          const anchor = `f-${ti}-${ii}`;
           if (i.type === "text") return `<div class="text">${md(i.text)}</div>`;
-          if (i.type === "interrupted") return `<div class="interrupt">You interrupted here</div>`;
+          if (i.type === "interrupted") return `<div class="interrupt" id="${anchor}">You interrupted here</div>`;
           const n = tools.push(i) - 1;
           const outcome = i.outcome ?? "no result";
-          return `<div class="tool" data-t="${n}"><span class="nm">${esc(i.name)}</span><span class="sm">${esc(i.summary)}</span>
+          const flagged = ["rejected", "denied", "error"].includes(outcome);
+          return `<div class="tool ${flagged ? "flag" : ""}" data-t="${n}" ${flagged ? `id="${anchor}"` : ""}><span class="nm">${esc(i.name)}</span><span class="sm">${esc(i.summary)}</span>
             <span class="dur">${dur(i.duration_ms)}</span><span class="chip ${esc(outcome)}">${esc(outcome)}</span></div>`;
         }).join("");
         const foot = t.requests || t.tool_calls
@@ -298,6 +402,7 @@
             <span class="lbl">Resume</span><code id="resumecmd">${esc(resumeCommand(s))}</code>
             <button class="copy" id="copyresume" title="Copy command" aria-label="Copy command">${COPY_ICON}</button>
           </div>
+          ${frictionPanel(points)}
         </section>
         <section class="panel" id="conversation">${html || `<div class="empty">This session has no stored conversation.</div>`}</section></main>`;
 
@@ -312,13 +417,23 @@
         const t = tools[+row.dataset.t];
         row.insertAdjacentHTML("afterend", `<div class="io"><div class="lbl">Input</div><pre>${esc(t.input)}</pre>${t.result != null ? `<div class="lbl">Result</div><pre>${esc(t.result)}</pre>` : ""}</div>`);
       };
+      document.querySelectorAll(".fp").forEach((li) => (li.onclick = (e) => {
+        if (e.target.closest("label")) return;
+        jumpTo(li.dataset.anchor);
+      }));
+      const showErrors = $("#showerrors");
+      const fpanel = document.querySelector(".fpanel");
+      if (showErrors) showErrors.onchange = () => fpanel.classList.toggle("errors", showErrors.checked);
       window.scrollTo(0, 0);
+      const first = points.find((p) => p.kind !== "error");
+      if (focusFriction && first) setTimeout(() => jumpTo(first.anchor), 50);
     }
 
     // ---------- routing and controls ----------
+    // #<session-id> opens a session; #<session-id>?friction opens it at the first friction point.
     function route() {
-      const id = decodeURIComponent(location.hash.slice(1));
-      id ? detailView(id) : listView();
+      const [id, extra] = decodeURIComponent(location.hash.slice(1)).split("?");
+      id ? detailView(id, extra === "friction") : listView();
     }
     window.addEventListener("hashchange", route);
 

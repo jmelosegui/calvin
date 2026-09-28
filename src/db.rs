@@ -9,7 +9,8 @@ const SCHEMA: &str = include_str!("schema.sql");
 /// - 1: first release layout. Early builds kept raw log lines one per row in `raw_lines`.
 /// - 2: raw lines live in zstd-compressed blocks in `raw_chunks`; `raw_lines` is migrated
 ///   into it and dropped.
-pub const SCHEMA_VERSION: i64 = 2;
+/// - 3: background-task notifications are no longer prompts; remove the ones imported as such.
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// Lines per compressed block when migrating old rows.
 const MIGRATION_CHUNK_BYTES: usize = 4 * 1024 * 1024;
@@ -51,6 +52,12 @@ fn init(conn: &Connection) -> Result<()> {
     conn.execute_batch(SCHEMA)?;
     if table_exists(conn, "raw_lines")? {
         migrate_raw_lines(conn).context("migrating raw log lines to the compressed layout")?;
+    }
+    if version < 3 {
+        conn.execute(
+            "DELETE FROM prompts WHERE text LIKE '<task-notification>%'",
+            [],
+        )?;
     }
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())

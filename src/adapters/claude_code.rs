@@ -190,7 +190,7 @@ fn parse_user(v: &Value, session_id: String, ts: String, is_sidechain: bool, out
         out.push(Event::Interrupted { id, session_id, ts });
         return;
     }
-    if text.starts_with("<local-command-") || text.starts_with("Caveat: The messages below") {
+    if is_injected(text) {
         return;
     }
     let (kind, text) = match command_text(text) {
@@ -205,6 +205,14 @@ fn parse_user(v: &Value, session_id: String, ts: String, is_sidechain: bool, out
         text,
         is_sidechain,
     }));
+}
+
+/// Text Claude Code writes into the log as a user message although you didn't type it:
+/// output of local commands, their caveat, and background-task notifications.
+fn is_injected(text: &str) -> bool {
+    text.starts_with("<local-command-")
+        || text.starts_with("Caveat: The messages below")
+        || text.starts_with("<task-notification>")
 }
 
 /// `<command-name>/shipit</command-name> ... <command-args>x</command-args>` → `/shipit x`.
@@ -401,10 +409,7 @@ pub fn timeline(records: &[Value]) -> Vec<crate::timeline::Event> {
                 }
                 let text = user_text(message);
                 let text = text.trim();
-                if text.is_empty()
-                    || text.starts_with("<local-command-")
-                    || text.starts_with("Caveat: The messages below")
-                {
+                if text.is_empty() || is_injected(text) {
                     continue;
                 }
                 if text.starts_with(INTERRUPTED_MARKER) {
@@ -443,6 +448,20 @@ fn tool_summary(name: &str, input: &Value) -> String {
         "WebFetch" => field("url"),
         "WebSearch" => field("query"),
         "Agent" | "Task" => field("description"),
+        // The plan's first heading, or its first line.
+        "ExitPlanMode" => field("plan").map(|p| {
+            p.lines()
+                .map(|l| l.trim().trim_start_matches('#').trim())
+                .find(|l| !l.is_empty())
+                .unwrap_or_default()
+                .to_string()
+        }),
+        "AskUserQuestion" => input
+            .get("questions")
+            .and_then(|q| q.get(0))
+            .and_then(|q| q.get("question"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
         _ => None,
     };
     let text = text.unwrap_or_else(|| {

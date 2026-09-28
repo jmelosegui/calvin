@@ -33,6 +33,11 @@ pub trait Progress {
     fn start(&mut self, _total_bytes: u64) {}
     fn advance(&mut self, _bytes: u64) {}
     fn finish(&mut self) {}
+    /// Checked between files; returning true ends the import early. What was read so far
+    /// is kept, and the next import continues from there.
+    fn should_stop(&self) -> bool {
+        false
+    }
 }
 
 /// No progress output.
@@ -75,6 +80,9 @@ pub fn ingest_claude_code(
         progress.start(pending.iter().map(|(_, todo)| todo).sum());
 
         for (path, todo) in pending {
+            if progress.should_stop() {
+                break;
+            }
             stats.files_seen += 1;
             if todo > 0 {
                 let tx = conn.transaction()?;

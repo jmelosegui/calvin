@@ -190,21 +190,29 @@ async fn local_only(State(st): State<Arc<AppState>>, req: Request, next: Next) -
 }
 
 /// Keep the database current: import new log lines every few seconds until shutdown.
+/// Lets `calvin stop` interrupt a long import between files instead of waiting for it.
+struct StopOnShutdown<'a>(&'a AppState);
+
+impl ingest::Progress for StopOnShutdown<'_> {
+    fn should_stop(&self) -> bool {
+        *self.0.shutdown.borrow()
+    }
+}
+
 pub async fn sync_loop(st: Arc<AppState>) {
     loop {
         let s = st.clone();
-        let result =
-            tokio::task::spawn_blocking(move || -> Result<usize> {
-                let mut conn = db::open(&s.db_path)?;
-                Ok(ingest::ingest_claude_code(
-                    &mut conn,
-                    &s.claude_dir,
-                    &s.prices,
-                    &mut ingest::Quiet,
-                )?
-                .lines)
-            })
-            .await;
+        let result = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let mut conn = db::open(&s.db_path)?;
+            Ok(ingest::ingest_claude_code(
+                &mut conn,
+                &s.claude_dir,
+                &s.prices,
+                &mut StopOnShutdown(&s),
+            )?
+            .lines)
+        })
+        .await;
         let (lines, error) = match result {
             Ok(Ok(lines)) => (lines, None),
             Ok(Err(e)) => (0, Some(format!("{e:#}"))),
