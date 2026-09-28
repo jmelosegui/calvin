@@ -88,6 +88,7 @@ fn parse_assistant(
             model,
             usage: message.get("usage").map(parse_usage),
             skill: str_at(v, "attributionSkill"),
+            effort: str_at(v, "effort"),
             is_sidechain,
         }));
     }

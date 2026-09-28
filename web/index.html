@@ -276,6 +276,18 @@
       return `${family} ${m[2]}${m[3] ? "." + m[3] : ""}`;
     }
 
+    const EFFORT_ORDER = ["max", "xhigh", "high", "medium", "low"];
+    // One chip per effort level: share of the model's requests, with cost on hover.
+    function effortMix(r) {
+      const known = r.efforts.filter((e) => e.effort);
+      if (!known.length) return `<span class="effort none">effort not recorded (the model doesn't support effort levels)</span>`;
+      const sorted = [...known].sort((a, b) => EFFORT_ORDER.indexOf(a.effort) - EFFORT_ORDER.indexOf(b.effort));
+      return `<span class="effort-label">Effort</span>` + sorted.map((e) => {
+        const pct = Math.round((e.requests / r.requests) * 100);
+        return `<span class="effort" title="${num(e.requests)} requests · ${money(e.cost_usd)}">${esc(e.effort)} <b>${pct}%</b></span>`;
+      }).join("");
+    }
+
     function renderModels(rows) {
       if (!rows.length) {
         $("#models").innerHTML = `<div class="empty">No model requests in this period.</div>`;
@@ -298,6 +310,7 @@
               <div class="val">${money(r.cost_usd)}</div>
             </div>
             <div class="sub" style="margin:4px 0 0">${num(r.requests)} requests${sub} · ${tok(r.output_tokens)} output tokens · ${num(r.sessions)} session${r.sessions === 1 ? "" : "s"}${cache}</div>
+            <div class="efforts">${effortMix(r)}</div>
           </div>`;
       }).join("");
       // The biggest lever: expensive models doing subagent work.

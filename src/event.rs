@@ -73,6 +73,8 @@ pub struct Request {
     pub model: Option<String>,
     pub usage: Option<Usage>,
     pub skill: Option<String>,
+    /// Reasoning effort the request ran at (`low` … `max`), if the harness records it.
+    pub effort: Option<String>,
     pub is_sidechain: bool,
 }
 

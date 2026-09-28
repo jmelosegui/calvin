@@ -227,15 +227,16 @@ pub fn write_event(tx: &Transaction, harness: &str, event: &Event) -> Result<()>
             // MAX keeps the most complete numbers if they ever differ.
             tx.prepare_cached(
                 "INSERT INTO requests (request_id, session_id, ts, model, input_tokens, output_tokens,
-                     cache_read, cache_write_5m, cache_write_1h, skill, is_sidechain)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                     cache_read, cache_write_5m, cache_write_1h, skill, is_sidechain, effort)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
                  ON CONFLICT (request_id) DO UPDATE SET
                      input_tokens = MAX(requests.input_tokens, excluded.input_tokens),
                      output_tokens = MAX(requests.output_tokens, excluded.output_tokens),
                      cache_read = MAX(requests.cache_read, excluded.cache_read),
                      cache_write_5m = MAX(requests.cache_write_5m, excluded.cache_write_5m),
                      cache_write_1h = MAX(requests.cache_write_1h, excluded.cache_write_1h),
-                     skill = COALESCE(requests.skill, excluded.skill)",
+                     skill = COALESCE(requests.skill, excluded.skill),
+                     effort = COALESCE(requests.effort, excluded.effort)",
             )?
             .execute(params![
                 r.request_id,
@@ -248,7 +249,8 @@ pub fn write_event(tx: &Transaction, harness: &str, event: &Event) -> Result<()>
                 u.cache_write_5m,
                 u.cache_write_1h,
                 r.skill,
-                r.is_sidechain
+                r.is_sidechain,
+                r.effort
             ])?;
         }
         Event::ToolCall(t) => {

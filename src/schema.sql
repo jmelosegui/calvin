@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS requests (
     cache_read     INTEGER,
     cache_write_5m INTEGER,
     cache_write_1h INTEGER,
+    effort         TEXT,
     cost_usd       REAL,
     skill          TEXT,
     is_sidechain   INTEGER NOT NULL DEFAULT 0

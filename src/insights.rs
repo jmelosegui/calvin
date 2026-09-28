@@ -499,6 +499,16 @@ pub struct ModelRow {
     pub cache_write: i64,
     pub cost_usd: f64,
     pub cache_hit_rate: Option<f64>,
+    /// Requests and cost per effort level, most used first. `effort` is `None` where
+    /// the model or harness doesn't record one.
+    pub efforts: Vec<EffortShare>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EffortShare {
+    pub effort: Option<String>,
+    pub requests: i64,
+    pub cost_usd: f64,
 }
 
 /// Usage per model, most expensive first.
@@ -527,9 +537,26 @@ pub fn models(conn: &Connection, since: &Since) -> Result<Vec<ModelRow>> {
                 cache_write: write,
                 cost_usd: r.get(8)?,
                 cache_hit_rate: ratio(Some(read), Some(read + write + input)),
+                efforts: Vec::new(),
             })
         })?
-        .collect::<Result<_, _>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut rows = rows;
+    let mut stmt = conn.prepare(
+        "SELECT model, effort, COUNT(*), COALESCE(SUM(cost_usd), 0) FROM requests
+         WHERE ts >= ?1 AND model IS NOT NULL GROUP BY model, effort ORDER BY 3 DESC",
+    )?;
+    let mut shares = stmt.query([&since.0])?;
+    while let Some(r) = shares.next()? {
+        let model: String = r.get(0)?;
+        if let Some(row) = rows.iter_mut().find(|m| m.model == model) {
+            row.efforts.push(EffortShare {
+                effort: r.get(1)?,
+                requests: r.get(2)?,
+                cost_usd: r.get(3)?,
+            });
+        }
+    }
     Ok(rows)
 }
 

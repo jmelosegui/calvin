@@ -10,7 +10,8 @@ const SCHEMA: &str = include_str!("schema.sql");
 /// - 2: raw lines live in zstd-compressed blocks in `raw_chunks`; `raw_lines` is migrated
 ///   into it and dropped.
 /// - 3: background-task notifications are no longer prompts; remove the ones imported as such.
-pub const SCHEMA_VERSION: i64 = 3;
+/// - 4: `requests.effort`, backfilled from the raw lines.
+pub const SCHEMA_VERSION: i64 = 4;
 
 /// Lines per compressed block when migrating old rows.
 const MIGRATION_CHUNK_BYTES: usize = 4 * 1024 * 1024;
@@ -49,6 +50,10 @@ fn init(conn: &Connection) -> Result<()> {
             "database schema v{version} is newer than this calvin (v{SCHEMA_VERSION}); upgrade calvin"
         );
     }
+    // Columns added after a table was first created; CREATE TABLE IF NOT EXISTS won't add them.
+    if table_exists(conn, "requests")? && !column_exists(conn, "requests", "effort")? {
+        conn.execute_batch("ALTER TABLE requests ADD COLUMN effort TEXT")?;
+    }
     conn.execute_batch(SCHEMA)?;
     if table_exists(conn, "raw_lines")? {
         migrate_raw_lines(conn).context("migrating raw log lines to the compressed layout")?;
@@ -59,7 +64,67 @@ fn init(conn: &Connection) -> Result<()> {
             [],
         )?;
     }
+    if version < 4 && table_exists(conn, "raw_chunks")? {
+        backfill_effort(conn).context("backfilling request effort from raw lines")?;
+    }
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    Ok(())
+}
+
+fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+    Ok(conn
+        .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))?
+        .query_map([], |r| r.get::<_, String>(0))?
+        .filter_map(Result::ok)
+        .any(|c| c == column))
+}
+
+/// Read the effort each request ran at from the stored raw lines, for requests imported
+/// before calvin recorded it.
+fn backfill_effort(conn: &Connection) -> Result<()> {
+    let missing: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM requests WHERE effort IS NULL",
+        [],
+        |r| r.get(0),
+    )?;
+    if missing == 0 {
+        return Ok(());
+    }
+    eprintln!("calvin: reading the effort level of {missing} earlier requests (one time)…");
+    conn.execute_batch("BEGIN")?;
+    let result = (|| -> Result<()> {
+        let mut update = conn
+            .prepare("UPDATE requests SET effort = ?1 WHERE request_id = ?2 AND effort IS NULL")?;
+        let mut chunks = conn.prepare("SELECT zdata FROM raw_chunks")?;
+        let mut rows = chunks.query([])?;
+        while let Some(r) = rows.next()? {
+            let raw = zstd::decode_all(&r.get::<_, Vec<u8>>(0)?[..])?;
+            for line in raw.split(|&b| b == b'\n') {
+                // Cheap filter before parsing: only assistant lines carry effort.
+                if !line.windows(9).any(|w| w == b"\"effort\":") {
+                    continue;
+                }
+                let Ok(v) = serde_json::from_slice::<serde_json::Value>(line) else {
+                    continue;
+                };
+                let (Some(effort), Some(id)) = (
+                    v.get("effort").and_then(|e| e.as_str()),
+                    v.get("requestId").and_then(|e| e.as_str()),
+                ) else {
+                    continue;
+                };
+                update.execute(params![effort, id])?;
+            }
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => conn.execute_batch("COMMIT")?,
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            return Err(e);
+        }
+    }
     Ok(())
 }
 

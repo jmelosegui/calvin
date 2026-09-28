@@ -244,3 +244,37 @@ fn model_usage_per_model() {
     assert_eq!((rows[0].requests, rows[0].output_tokens), (2, 101));
     assert_eq!(rows[1].requests, 1);
 }
+
+#[test]
+fn effort_is_recorded_per_request() {
+    let (_tmp, claude) = fixture();
+    let mut f = OpenOptions::new()
+        .append(true)
+        .open(log_file(&claude))
+        .unwrap();
+    writeln!(
+        f,
+        r#"{{"type":"assistant","sessionId":"{SESSION}","uuid":"a99","timestamp":"2026-09-01T11:10:00.000Z","requestId":"req_effort","effort":"xhigh","message":{{"model":"claude-opus-5","role":"assistant","content":[{{"type":"text","text":"done"}}],"usage":{{"input_tokens":1,"output_tokens":1}}}}}}"#
+    )
+    .unwrap();
+    let mut conn = db::open_in_memory().unwrap();
+    ingest(&mut conn, &claude);
+    let effort: Option<String> = conn
+        .query_row(
+            "SELECT effort FROM requests WHERE request_id = 'req_effort'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(effort.as_deref(), Some("xhigh"));
+    let opus = insights::models(&conn, &Since::all())
+        .unwrap()
+        .into_iter()
+        .find(|m| m.model == "claude-opus-5")
+        .unwrap();
+    assert!(
+        opus.efforts
+            .iter()
+            .any(|e| e.effort.as_deref() == Some("xhigh") && e.requests == 1)
+    );
+}
