@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 use directories::{BaseDirs, ProjectDirs};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::prices::{ModelPrice, PriceTable};
 
@@ -21,6 +21,58 @@ pub struct Config {
     pub prices: PricesConfig,
     pub skills: SkillsConfig,
     pub updates: UpdatesConfig,
+    pub advisor: AdvisorConfig,
+}
+
+/// "Ask for a plan" on the Opportunities page: which AI tool writes it, and how.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct AdvisorConfig {
+    /// `claude-code` or `command`.
+    pub provider: String,
+    #[serde(rename = "claude-code")]
+    pub claude_code: ClaudeCodeAdvisor,
+    pub command: CommandAdvisor,
+}
+
+impl Default for AdvisorConfig {
+    fn default() -> Self {
+        Self {
+            provider: "claude-code".into(),
+            claude_code: ClaudeCodeAdvisor::default(),
+            command: CommandAdvisor::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ClaudeCodeAdvisor {
+    /// The Claude Code executable.
+    pub program: String,
+    pub model: String,
+    /// Spending cap per run, in USD.
+    pub max_budget_usd: f64,
+}
+
+impl Default for ClaudeCodeAdvisor {
+    fn default() -> Self {
+        Self {
+            program: "claude".into(),
+            model: "claude-sonnet-5".into(),
+            max_budget_usd: 1.0,
+        }
+    }
+}
+
+/// Any tool that reads a prompt on stdin and writes its answer to stdout.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct CommandAdvisor {
+    /// Shown on the button, e.g. "Codex".
+    pub name: String,
+    pub program: String,
+    pub args: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -113,6 +165,39 @@ pub fn config_file() -> Result<PathBuf> {
         return Ok(PathBuf::from(path));
     }
     Ok(project_dirs()?.config_dir().join("config.toml"))
+}
+
+/// Replace the `[advisor]` section of config.toml, keeping every other setting.
+pub fn save_advisor(advisor: &AdvisorConfig) -> Result<()> {
+    let path = config_file()?;
+    let mut doc: toml::Table = match std::fs::read_to_string(&path) {
+        Ok(text) => toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?,
+        Err(_) => toml::Table::new(),
+    };
+    doc.insert("advisor".into(), toml::Value::try_from(advisor)?);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(&path, toml::to_string_pretty(&doc)?)
+        .with_context(|| format!("writing {}", path.display()))
+}
+
+/// Find a program on PATH, the way a shell would (including `.exe` / `.cmd` on Windows).
+pub fn find_program(program: &str) -> Option<PathBuf> {
+    let direct = PathBuf::from(program);
+    if direct.components().count() > 1 {
+        return direct.is_file().then_some(direct);
+    }
+    let exts: &[&str] = if cfg!(windows) {
+        &["", ".exe", ".cmd", ".bat"]
+    } else {
+        &[""]
+    };
+    std::env::split_paths(&std::env::var_os("PATH")?).find_map(|dir| {
+        exts.iter()
+            .map(|ext| dir.join(format!("{program}{ext}")))
+            .find(|p| p.is_file())
+    })
 }
 
 pub fn db_path() -> Result<PathBuf> {

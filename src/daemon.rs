@@ -163,16 +163,19 @@ pub fn run_foreground(cfg: &Config) -> Result<()> {
     runtime.block_on(async {
         let (listener, port) = bind().await?;
         let token = random_token()?;
-        let st = Arc::new(AppState::new(
-            data_dir.clone(),
-            crate::update::enabled(cfg.updates.check),
-            db_path,
-            cfg.claude_dir()?,
-            cfg.skill_folders(),
-            cfg.price_table(),
-            token.clone(),
-            port,
-        ));
+        let st = Arc::new(
+            AppState::new(
+                data_dir.clone(),
+                crate::update::enabled(cfg.updates.check),
+                db_path,
+                cfg.claude_dir()?,
+                cfg.skill_folders(),
+                cfg.price_table(),
+                token.clone(),
+                port,
+            )
+            .with_advisor(cfg.advisor.clone()),
+        );
         let state = RunState {
             pid: std::process::id(),
             port,

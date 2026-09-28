@@ -22,9 +22,13 @@ loads them into a local SQLite database, and shows you:
 Your session logs contain prompts, source code and often confidential details. calvin:
 
 - never sends data anywhere: no telemetry, no accounts, no cloud
-- makes one network call: while running, it asks GitHub once a day whether a newer release
-  exists, so it can tell you. That request carries nothing about you or your usage. Turn it
-  off with `[updates] check = false` in `config.toml`
+- makes one network call on its own: while running, it asks GitHub once a day whether a
+  newer release exists, so it can tell you. That request carries nothing about you or your
+  usage. Turn it off with `[updates] check = false` in `config.toml`
+- sends your data only when you ask it to: **Ask for a plan** on the Opportunities page
+  passes the report (findings, numbers, and evidence such as repeated prompts and rejected
+  commands) to the AI tool you choose. **Preview what is sent** shows exactly what calvin
+  sends; **Copy as prompt** lets you paste it yourself instead
 - never writes to your harness folders or skill folders
 - serves its dashboard on `127.0.0.1` only
 
@@ -109,6 +113,18 @@ Optional. Everything works with defaults. `config.toml` lives in your OS config 
 ```toml
 [skills]
 extra_paths = ["~/other/skills"]  # more places where skills are installed
+
+[advisor]                         # who writes plans on the Opportunities page
+provider = "claude-code"          # or "command"
+
+[advisor.claude-code]
+model = "claude-sonnet-5"
+max_budget_usd = 1.0
+
+[advisor.command]                 # any tool: prompt on stdin, Markdown on stdout
+name = "My tool"
+program = "my-tool"
+args = []
 
 [prices.overrides]
 # "model-id" = { input = 0.0, output = 0.0 }   # USD per million tokens

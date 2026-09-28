@@ -50,6 +50,32 @@ pub struct Opportunity {
     /// Estimated saving in USD over the period, when it can be worked out.
     pub saving_usd: Option<f64>,
     pub evidence: Vec<Evidence>,
+    /// One number to track over time, so a fix shows up as a trend.
+    pub metric: Option<Metric>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct Metric {
+    pub value: f64,
+    pub label: String,
+    pub lower_is_better: bool,
+}
+
+impl Metric {
+    fn lower(value: impl Into<f64>, label: &str) -> Option<Metric> {
+        Some(Metric {
+            value: value.into(),
+            label: label.into(),
+            lower_is_better: true,
+        })
+    }
+    fn higher(value: impl Into<f64>, label: &str) -> Option<Metric> {
+        Some(Metric {
+            value: value.into(),
+            label: label.into(),
+            lower_is_better: false,
+        })
+    }
 }
 
 /// Everything the checks read besides the database.
@@ -110,6 +136,7 @@ fn skip() -> Opportunity {
         snippet: None,
         saving_usd: None,
         evidence: Vec::new(),
+        metric: None,
     }
 }
 
@@ -267,6 +294,7 @@ fn claude_md(projects: &[Project]) -> Opportunity {
     let total_cost: f64 = projects.iter().map(|p| p.cost).sum();
     Opportunity {
         id: "claude-md",
+        metric: Metric::lower(missing.len() as f64, "projects without a CLAUDE.md"),
         area: "Memory",
         status: if missing.is_empty() { Status::Good } else { Status::Action },
         title: "Give your projects a CLAUDE.md".into(),
@@ -306,6 +334,7 @@ fn personal_memory(claude_dir: &Path) -> Opportunity {
         snippet: Some("/memory".into()),
         saving_usd: None,
         evidence: Vec::new(),
+        ..skip()
     }
 }
 
@@ -372,6 +401,7 @@ fn subagent_model(
     };
     Ok(Opportunity {
         id: "subagent-model",
+        metric: Metric::lower(premium_cost, "USD of subagent work on premium models"),
         area: "Cost",
         status,
         title: "Run subagents on a cheaper model".into(),
@@ -419,6 +449,7 @@ fn custom_agents(
     let defined = user + project;
     Ok(Opportunity {
         id: "custom-agents",
+        metric: Metric::higher(defined as f64, "custom subagents"),
         area: "Agents",
         status: if defined > 0 { Status::Good } else if agent_calls >= 10 { Status::Consider } else { Status::Good },
         title: "Define your own subagents".into(),
@@ -453,6 +484,7 @@ fn effort(conn: &Connection, since: &Since, settings: &Settings) -> Result<Oppor
     let share = pct(high, total);
     Ok(Opportunity {
         id: "effort",
+        metric: Metric::lower(share as f64, "% of requests at xhigh or max"),
         area: "Cost",
         status: if share >= 50 { Status::Consider } else { Status::Good },
         title: "Match effort to the task".into(),
@@ -538,6 +570,7 @@ fn mcp_servers(
         .collect();
     Ok(Opportunity {
         id: "mcp-unused",
+        metric: Metric::lower(unused.len() as f64, "unused MCP servers"),
         area: "Context",
         status: if unused.is_empty() { Status::Good } else { Status::Action },
         title: "Remove MCP servers you don't use".into(),
@@ -572,6 +605,7 @@ fn unused_skills(
     }
     Ok(Opportunity {
         id: "skills-unused",
+        metric: Metric::lower(never.len() as f64, "skills that never ran"),
         area: "Skills",
         status: if never.is_empty() { Status::Good } else { Status::Consider },
         title: "Prune or fix skills that never run".into(),
@@ -611,6 +645,7 @@ fn skills_model_skips(
     }
     Ok(Opportunity {
         id: "skills-model-skips",
+        metric: Metric::lower(skipped.len() as f64, "skills Claude doesn't pick"),
         area: "Skills",
         status: Status::Action,
         title: "Help Claude pick your skills by itself".into(),
@@ -664,6 +699,7 @@ fn repeated_prompts(conn: &Connection, since: &Since) -> Result<Opportunity> {
     }
     Ok(Opportunity {
         id: "repeated-prompts",
+        metric: Metric::lower(rows.len() as f64, "prompts typed 4+ times"),
         area: "Automation",
         status: Status::Action,
         title: "Turn prompts you repeat into skills or commands".into(),
@@ -728,6 +764,7 @@ fn permission_friction(conn: &Connection, since: &Since) -> Result<Opportunity> 
     }
     Ok(Opportunity {
         id: "permission-rules",
+        metric: Metric::lower(repeated.len() as f64, "repeated rejections"),
         area: "Permissions",
         status: Status::Action,
         title: "Turn repeated rejections into permission rules".into(),
@@ -757,6 +794,7 @@ fn shared_settings(projects: &[Project]) -> Opportunity {
     }
     Opportunity {
         id: "shared-settings",
+        metric: Metric::lower(local_only.len() as f64, "projects without shared settings"),
         area: "Team",
         status: Status::Consider,
         title: "Share project permissions with your team".into(),
@@ -827,6 +865,7 @@ fn hooks(settings: &Settings, projects: &[Project]) -> Opportunity {
         snippet: Some("/hooks".into()),
         saving_usd: None,
         evidence,
+        ..skip()
     }
 }
 
@@ -866,6 +905,7 @@ fn plan_mode(conn: &Connection, since: &Since) -> Result<Opportunity> {
     let total = big.len() + planned_big;
     Ok(Opportunity {
         id: "plan-mode",
+        metric: Metric::lower(big.len() as f64, "large sessions without a plan"),
         area: "Workflow",
         status: if big.len() * 2 > total { Status::Consider } else { Status::Good },
         title: "Plan big tasks before building".into(),
@@ -900,6 +940,7 @@ fn long_sessions(conn: &Connection, since: &Since) -> Result<Opportunity> {
     let heavy_cost: f64 = heavy.iter().map(|s| s.cost_usd).sum();
     Ok(Opportunity {
         id: "long-sessions",
+        metric: Metric::lower(heavy.len() as f64, "sessions over $75"),
         area: "Context",
         status: Status::Consider,
         title: "Start fresh sessions for new tasks".into(),
@@ -929,6 +970,7 @@ fn log_retention(settings: &Settings) -> Opportunity {
     let days = settings.get("cleanupPeriodDays").and_then(Value::as_i64);
     Opportunity {
         id: "log-retention",
+        metric: Metric::higher(days.unwrap_or(30) as f64, "days of logs kept"),
         area: "Data",
         status: match days {
             Some(d) if d >= 90 => Status::Good,
@@ -960,5 +1002,6 @@ fn status_line(settings: &Settings) -> Opportunity {
         snippet: Some("/statusline".into()),
         saving_usd: None,
         evidence: Vec::new(),
+        ..skip()
     }
 }

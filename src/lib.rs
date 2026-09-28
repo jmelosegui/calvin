@@ -1,6 +1,7 @@
 //! calvin: learn how you use AI coding agents, from the logs they already write.
 
 pub mod adapters;
+pub mod advisor;
 pub mod config;
 pub mod daemon;
 pub mod db;

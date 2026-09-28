@@ -6,7 +6,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -64,6 +64,9 @@ pub struct AppState {
     pub claude_dir: PathBuf,
     pub skill_folders: SkillFolders,
     skill_index: Mutex<Option<Vec<skills::InstalledSkill>>>,
+    /// Which AI tool writes plans; can change from the Opportunities page.
+    advisor: RwLock<crate::config::AdvisorConfig>,
+    advisor_job: Arc<Mutex<crate::advisor::Job>>,
     pub prices: PriceTable,
     pub token: String,
     pub port: u16,
@@ -98,6 +101,8 @@ impl AppState {
             claude_dir,
             skill_folders,
             skill_index: Mutex::new(None),
+            advisor: RwLock::new(crate::config::AdvisorConfig::default()),
+            advisor_job: Arc::new(Mutex::new(crate::advisor::Job::default())),
             prices,
             token,
             port,
@@ -105,6 +110,11 @@ impl AppState {
             started: Instant::now(),
             last_sync: Mutex::new(None),
         }
+    }
+
+    pub fn with_advisor(self, advisor: crate::config::AdvisorConfig) -> Self {
+        *self.advisor.write().unwrap() = advisor;
+        self
     }
 
     /// Ask the server and sync loop to stop.
@@ -165,6 +175,14 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/cache", get(cache))
         .route("/api/models", get(models))
         .route("/api/opportunities", get(opportunities))
+        .route("/api/opportunities/trends", get(opportunity_trends))
+        .route("/api/advisor/providers", get(advisor_providers))
+        .route("/api/advisor/provider", post(advisor_set_provider))
+        .route("/api/advisor/preview", get(advisor_preview))
+        .route("/api/advisor/run", post(advisor_run))
+        .route("/api/advisor/status", get(advisor_status))
+        .route("/api/advisor/reports", get(advisor_reports))
+        .route("/api/advisor/report", get(advisor_report))
         .route("/api/live", get(live))
         .layer(middleware::from_fn_with_state(state.clone(), local_only))
         .with_state(state)
@@ -641,14 +659,275 @@ async fn opportunities(
 ) -> ApiResult<Vec<crate::opportunities::Opportunity>> {
     let since = p.since()?;
     let s = st.clone();
+    read(&st, move |c| compute_opportunities(&s, c, &since)).await
+}
+
+fn compute_opportunities(
+    st: &AppState,
+    c: &Connection,
+    since: &Since,
+) -> Result<Vec<crate::opportunities::Opportunity>> {
+    let skills = installed_skills(st, c)?;
+    let ctx = crate::opportunities::Context {
+        claude_dir: &st.claude_dir,
+        prices: &st.prices,
+        skills: &skills,
+    };
+    crate::opportunities::run(c, since, &ctx)
+}
+
+/// Once a day, record each opportunity's metric (last 30 days) for the trend lines.
+pub async fn snapshot_loop(st: Arc<AppState>) {
+    loop {
+        let s = st.clone();
+        let result = tokio::task::spawn_blocking(move || -> Result<()> {
+            let conn = db::open(&s.db_path)?;
+            let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+            let done: bool = conn.query_row(
+                "SELECT EXISTS (SELECT 1 FROM opportunity_snapshots WHERE day = ?1)",
+                [&today],
+                |r| r.get(0),
+            )?;
+            if done {
+                return Ok(());
+            }
+            for o in compute_opportunities(&s, &conn, &Since::parse("30d")?)? {
+                let status = serde_json::to_value(o.status)?;
+                conn.execute(
+                    "INSERT OR REPLACE INTO opportunity_snapshots (day, id, status, metric, saving_usd)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    rusqlite::params![
+                        today,
+                        o.id,
+                        status.as_str().unwrap_or_default(),
+                        o.metric.map(|m| m.value),
+                        o.saving_usd
+                    ],
+                )?;
+            }
+            Ok(())
+        })
+        .await;
+        if let Ok(Err(e)) = result {
+            eprintln!("opportunity snapshot failed: {e:#}");
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(60 * 60)) => {}
+            _ = st.stopped() => return,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct TrendPoint {
+    day: String,
+    status: String,
+    metric: Option<f64>,
+}
+
+type Trends = std::collections::BTreeMap<String, Vec<TrendPoint>>;
+
+async fn opportunity_trends(State(st): State<Arc<AppState>>) -> ApiResult<Trends> {
     read(&st, move |c| {
-        let skills = installed_skills(&s, c)?;
-        let ctx = crate::opportunities::Context {
-            claude_dir: &s.claude_dir,
-            prices: &s.prices,
-            skills: &skills,
-        };
-        crate::opportunities::run(c, &since, &ctx)
+        let mut out = Trends::new();
+        let mut stmt = c.prepare(
+            "SELECT id, day, status, metric FROM opportunity_snapshots
+             WHERE day >= date('now', '-180 days') ORDER BY id, day",
+        )?;
+        let mut rows = stmt.query([])?;
+        while let Some(r) = rows.next()? {
+            out.entry(r.get(0)?).or_default().push(TrendPoint {
+                day: r.get(1)?,
+                status: r.get(2)?,
+                metric: r.get(3)?,
+            });
+        }
+        Ok(out)
+    })
+    .await
+}
+
+fn advisor_prompt(st: &AppState, c: &Connection, since_text: &str) -> Result<String> {
+    let since = Since::parse(since_text)?;
+    let opportunities = compute_opportunities(st, c, &since)?;
+    let skills = installed_skills(st, c)?;
+    let summary = insights::summary(c, &since)?;
+    let models = insights::models(c, &since)?;
+    Ok(crate::advisor::build_prompt(
+        &format!("last {since_text}"),
+        &opportunities,
+        &skills,
+        &summary,
+        &models,
+    ))
+}
+
+async fn advisor_providers(
+    State(st): State<Arc<AppState>>,
+) -> Json<Vec<crate::advisor::ProviderInfo>> {
+    Json(crate::advisor::providers(&st.advisor.read().unwrap()))
+}
+
+#[derive(Deserialize)]
+struct ProviderChoice {
+    provider: String,
+    name: Option<String>,
+    program: Option<String>,
+    args: Option<Vec<String>>,
+}
+
+/// Choose the advisor (and, for a custom command, what to run). Saved to config.toml.
+async fn advisor_set_provider(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(choice): Json<ProviderChoice>,
+) -> Response {
+    if headers.get(ACTION_HEADER).is_none() {
+        return ApiError(
+            StatusCode::FORBIDDEN,
+            format!("missing {ACTION_HEADER} header"),
+        )
+        .into_response();
+    }
+    let mut cfg = st.advisor.read().unwrap().clone();
+    cfg.provider = choice.provider;
+    if let Some(name) = choice.name {
+        cfg.command.name = name;
+    }
+    if let Some(program) = choice.program {
+        cfg.command.program = program;
+    }
+    if let Some(args) = choice.args {
+        cfg.command.args = args;
+    }
+    if let Err(e) = crate::advisor::Provider::from_config(&cfg) {
+        return ApiError(StatusCode::BAD_REQUEST, format!("{e:#}")).into_response();
+    }
+    if let Err(e) = crate::config::save_advisor(&cfg) {
+        return ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response();
+    }
+    *st.advisor.write().unwrap() = cfg;
+    StatusCode::NO_CONTENT.into_response()
+}
+
+#[derive(Serialize)]
+struct AdvisorPreview {
+    provider: String,
+    system: &'static str,
+    prompt: String,
+}
+
+/// Exactly what would be sent, so you can check before pressing the button.
+async fn advisor_preview(
+    State(st): State<Arc<AppState>>,
+    Query(p): Query<Params>,
+) -> ApiResult<AdvisorPreview> {
+    let since = p.since.clone().unwrap_or_else(|| "30d".into());
+    let s = st.clone();
+    read(&st, move |c| {
+        let provider = crate::advisor::Provider::from_config(&s.advisor.read().unwrap())?;
+        Ok(AdvisorPreview {
+            provider: provider.name(),
+            system: crate::advisor::SYSTEM_PROMPT,
+            prompt: advisor_prompt(&s, c, &since)?,
+        })
+    })
+    .await
+}
+
+async fn advisor_run(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(p): Query<Params>,
+) -> Response {
+    if headers.get(ACTION_HEADER).is_none() {
+        return ApiError(
+            StatusCode::FORBIDDEN,
+            format!("missing {ACTION_HEADER} header"),
+        )
+        .into_response();
+    }
+    let since = p.since.clone().unwrap_or_else(|| "30d".into());
+    let s = st.clone();
+    let result = tokio::task::spawn_blocking(move || -> Result<()> {
+        let provider = crate::advisor::Provider::from_config(&s.advisor.read().unwrap())?;
+        let conn = db::open_read(&s.db_path)?;
+        let prompt = advisor_prompt(&s, &conn, &since)?;
+        crate::advisor::start(
+            s.advisor_job.clone(),
+            provider,
+            prompt,
+            since,
+            s.db_path.clone(),
+        )
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => StatusCode::ACCEPTED.into_response(),
+        Ok(Err(e)) => ApiError(StatusCode::CONFLICT, format!("{e:#}")).into_response(),
+        Err(e) => ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn advisor_status(State(st): State<Arc<AppState>>) -> Json<crate::advisor::Job> {
+    Json(st.advisor_job.lock().unwrap().snapshot())
+}
+
+#[derive(Serialize)]
+struct ReportRow {
+    id: i64,
+    created_at: String,
+    since: String,
+    model: Option<String>,
+    status: String,
+    error: Option<String>,
+    cost_usd: Option<f64>,
+    duration_ms: Option<i64>,
+    report: Option<String>,
+}
+
+fn report_row(r: &rusqlite::Row) -> rusqlite::Result<ReportRow> {
+    Ok(ReportRow {
+        id: r.get(0)?,
+        created_at: r.get(1)?,
+        since: r.get(2)?,
+        model: r.get(3)?,
+        status: r.get(4)?,
+        error: r.get(5)?,
+        cost_usd: r.get(6)?,
+        duration_ms: r.get(7)?,
+        report: r.get(8)?,
+    })
+}
+
+async fn advisor_reports(State(st): State<Arc<AppState>>) -> ApiResult<Vec<ReportRow>> {
+    read(&st, |c| {
+        let rows = c
+            .prepare(
+                "SELECT id, created_at, since, model, status, error, cost_usd, duration_ms, substr(report, 1, 240)
+                 FROM ai_reports ORDER BY id DESC LIMIT 50",
+            )?
+            .query_map([], report_row)?
+            .collect::<Result<_, _>>()?;
+        Ok(rows)
+    })
+    .await
+}
+
+async fn advisor_report(
+    State(st): State<Arc<AppState>>,
+    Query(p): Query<Params>,
+) -> ApiResult<ReportRow> {
+    let Some(id) = p.id.clone().and_then(|i| i.parse::<i64>().ok()) else {
+        return Err(ApiError(StatusCode::BAD_REQUEST, "missing ?id=".into()));
+    };
+    read(&st, move |c| {
+        Ok(c.query_row(
+            "SELECT id, created_at, since, model, status, error, cost_usd, duration_ms, report
+             FROM ai_reports WHERE id = ?1",
+            [id],
+            report_row,
+        )?)
     })
     .await
 }
@@ -667,6 +946,7 @@ pub async fn serve(listener: tokio::net::TcpListener, st: Arc<AppState>) -> Resu
     tokio::spawn(sync_loop(st.clone()));
     tokio::spawn(update_loop(st.clone()));
     tokio::spawn(skill_index_loop(st.clone()));
+    tokio::spawn(snapshot_loop(st.clone()));
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),

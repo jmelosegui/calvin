@@ -96,3 +96,27 @@ CREATE INDEX IF NOT EXISTS requests_session ON requests (session_id);
 CREATE INDEX IF NOT EXISTS tool_calls_session ON tool_calls (session_id);
 CREATE INDEX IF NOT EXISTS friction_session ON friction (session_id);
 CREATE INDEX IF NOT EXISTS sessions_started ON sessions (started_at);
+
+-- One row per opportunity check per day, so fixes show up as trends.
+CREATE TABLE IF NOT EXISTS opportunity_snapshots (
+    day        TEXT NOT NULL,
+    id         TEXT NOT NULL,
+    status     TEXT NOT NULL,
+    metric     REAL,
+    saving_usd REAL,
+    PRIMARY KEY (day, id)
+);
+
+-- Plans written by Claude from the opportunities report, kept so you can look back.
+CREATE TABLE IF NOT EXISTS ai_reports (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at  TEXT NOT NULL,
+    since       TEXT NOT NULL,
+    model       TEXT,
+    prompt      TEXT NOT NULL,
+    report      TEXT,
+    status      TEXT NOT NULL,
+    error       TEXT,
+    cost_usd    REAL,
+    duration_ms INTEGER
+);

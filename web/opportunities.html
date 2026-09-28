@@ -49,6 +49,56 @@
     .ev a:hover { text-decoration-color: var(--orange); }
     .ev li.more-row { cursor: pointer; color: var(--muted); display: block; }
     .ev li.hidden { display: none; }
+
+    /* ---------- advisor ---------- */
+    .advisor { grid-column: span 12; }
+    .adv-head { display: flex; gap: 20px; align-items: flex-start; }
+    .adv-head h2 { margin: 0 0 4px; }
+    .adv-head .sub { max-width: 820px; }
+    .prov { margin-left: auto; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; white-space: nowrap; }
+    select, .field {
+      padding: 8px 10px; border: 1.5px solid var(--line-dim); border-radius: 8px; background: var(--bg);
+      color: var(--text); font: 500 13px "Outfit", sans-serif;
+    }
+    select:focus, .field:focus { outline: none; border-color: var(--orange); }
+    .custom { display: none; gap: 8px; margin: 4px 0 12px; }
+    .custom.show { display: flex; }
+    .custom .wide { flex: 1; }
+    .adv-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+    .adv-note { color: var(--muted); font-size: 13px; }
+    .btn:disabled { opacity: 0.5; cursor: default; }
+    .progress { display: none; margin-top: 16px; padding: 12px 14px; border: 1px dashed var(--line-dim); border-radius: 10px; }
+    .progress.show { display: block; }
+    .progress .now { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+    .spinner { width: 14px; height: 14px; border: 2px solid var(--line-dim); border-top-color: var(--orange); border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .progress ol { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font: 500 12px "JetBrains Mono", monospace; }
+    .plan { margin-top: 16px; font-size: 14.5px; line-height: 1.6; }
+    .plan:empty { display: none; }
+    .plan .meta { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+    .plan h4 { margin: 18px 0 8px; font-size: 17px; }
+    .plan p { margin: 0 0 10px; }
+    .plan code { padding: 1px 5px; border-radius: 4px; background: var(--btn); font: 500 12.5px "JetBrains Mono", monospace; }
+    .plan pre { margin: 8px 0 12px; padding: 10px 12px; overflow: auto; border: 1px solid var(--line-dim); border-radius: 8px; font: 500 12px/1.55 "JetBrains Mono", monospace; }
+    .plan a { color: var(--orange-ink); }
+    .plan.error { color: var(--orange-ink); }
+    .past { margin-top: 16px; }
+    .past:empty { display: none; }
+    .past h4 { margin: 0 0 6px; font-size: 13px; color: var(--muted); font-weight: 500; }
+    .past button { display: block; width: 100%; text-align: left; padding: 7px 0; border: 0; border-bottom: 1px dashed var(--line-dim); background: none; color: var(--text); font: 500 13px "Outfit", sans-serif; cursor: pointer; }
+    .past button:hover { color: var(--orange-ink); }
+    .past button span { color: var(--muted); margin-left: 8px; font-size: 12px; }
+    dialog { max-width: 900px; width: 90vw; max-height: 80vh; padding: 0; border: 1.5px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--text); }
+    dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
+    dialog .dh { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--line-dim); }
+    dialog .dh b { flex: 1; }
+    dialog pre { margin: 0; padding: 16px 18px; max-height: 64vh; overflow: auto; white-space: pre-wrap; font: 500 12px/1.55 "JetBrains Mono", monospace; }
+
+    /* ---------- trend on each card ---------- */
+    .trend { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
+    .trend svg { width: 120px; height: 26px; overflow: visible; }
+    .trend polyline { fill: none; stroke: var(--orange); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+    .trend .better { color: var(--text); font-weight: 600; }
   </style>
 </head>
 <body>
@@ -73,9 +123,38 @@
     </div>
   </div>
 
+  <main>
+    <section class="panel advisor" id="advisor">
+      <div class="adv-head">
+        <div>
+          <h2>Ask for a plan</h2>
+          <p class="sub">Sends this report, with its evidence (including the text of repeated prompts and rejected commands), to the AI tool you choose. It writes a prioritised plan with drafts you can use. Nothing is sent until you press the button. The tool may add context of its own; Claude Code, for example, includes your signed-in account.</p>
+        </div>
+        <label class="prov">Advisor <select id="provider"></select></label>
+      </div>
+      <div class="custom" id="custom">
+        <input class="field" id="cname" placeholder="Name, e.g. Codex" />
+        <input class="field" id="cprogram" placeholder="Program, e.g. codex" />
+        <input class="field wide" id="cargs" placeholder="Arguments, space separated (the prompt arrives on stdin)" />
+        <button class="btn" id="csave">Save</button>
+      </div>
+      <div class="adv-actions">
+        <button class="btn primary" id="ask">Ask for a plan</button>
+        <button class="btn" id="preview">Preview what is sent</button>
+        <button class="btn" id="copyprompt">Copy as prompt</button>
+        <span class="adv-note" id="advnote"></span>
+      </div>
+      <div class="progress" id="progress"></div>
+      <div class="plan" id="plan"></div>
+      <div class="past" id="past"></div>
+    </section>
+  </main>
+
   <main id="main"><section class="panel"><div class="empty">Checking your setup…</div></section></main>
 
   <footer>Checked against your calvin data, Claude Code settings and the projects you worked in. Nothing is changed for you.</footer>
+
+  <dialog id="dialog"><div class="dh"><b id="dtitle"></b><button class="btn" id="dcopy">Copy</button><button class="btn" id="dclose">Close</button></div><pre id="dbody"></pre></dialog>
 
   <script>
     const $ = (s) => document.querySelector(s);
@@ -86,6 +165,34 @@
     const SHOWN = 4;
     let range = "30d";
     let items = [];
+    let trends = {};
+
+    // Small, safe Markdown: escape first, then fences, inline code, bold, headings, links.
+    function md(src) {
+      return String(src).split(/```/).map((part, i) => {
+        if (i % 2 === 1) return `<pre>${esc(part.replace(/^[\w+-]*\n/, "").replace(/\n$/, ""))}</pre>`;
+        return esc(part)
+          .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+          .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+          .replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>")
+          .replace(/^#{1,6} (.+)$/gm, "<h4>$1</h4>")
+          .split(/\n{2,}/).map((p) => (p.trim() ? `<p>${p.replace(/\n/g, "<br>")}</p>` : "")).join("");
+      }).join("");
+    }
+
+    // A tiny line of the metric over the days calvin has recorded it.
+    function trend(o) {
+      const pts = (trends[o.id] ?? []).filter((p) => p.metric != null);
+      if (!o.metric || pts.length < 2) return "";
+      const vals = pts.map((p) => p.metric);
+      const min = Math.min(...vals), max = Math.max(...vals), span = max - min || 1;
+      const line = vals.map((v, i) => `${(i / (vals.length - 1)) * 120},${24 - ((v - min) / span) * 22}`).join(" ");
+      const first = vals[0], last = vals[vals.length - 1];
+      const better = o.metric.lower_is_better ? last < first : last > first;
+      const fmt = (v) => (Number.isInteger(v) ? v : v.toFixed(1));
+      return `<div class="trend"><svg viewBox="0 0 120 26"><polyline points="${line}"/></svg>
+        <span>${esc(o.metric.label)}: ${fmt(first)} → <span class="${better ? "better" : ""}">${fmt(last)}</span> since ${esc(pts[0].day)}</span></div>`;
+    }
 
     function card(o, i) {
       const ev = o.evidence.map((e, n) => {
@@ -99,6 +206,7 @@
           <div class="head"><span class="area">${esc(o.area)}</span>${badge}</div>
           <h3>${esc(o.title)}</h3>
           <div class="finding">${esc(o.finding)}</div>
+          ${trend(o)}
           ${o.status === "good" ? "" : `
             <div class="why">${esc(o.why)}</div>
             <div class="fix"><b>What to do:</b> ${esc(o.fix)}</div>
@@ -134,6 +242,7 @@
         const r = await fetch(`/api/opportunities?since=${range}`);
         if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? r.status);
         items = await r.json();
+        trends = await fetch("/api/opportunities/trends").then((x) => (x.ok ? x.json() : {})).catch(() => ({}));
         render();
       } catch (e) {
         $("#main").innerHTML = `<section class="panel"><div class="empty error">${esc(e.message)}</div></section>`;
@@ -164,6 +273,137 @@
       document.querySelectorAll("#range button").forEach((x) => x.classList.toggle("active", x === b));
       load();
     }));
+    // ---------- advisor ----------
+    let providers = [];
+    let polling = null;
+    const current = () => providers.find((p) => p.selected);
+
+    async function initAdvisor() {
+      providers = await fetch("/api/advisor/providers").then((r) => r.json());
+      const sel = $("#provider");
+      sel.innerHTML = providers.map((p) => `<option value="${p.id}" ${p.selected ? "selected" : ""}>${esc(p.name)}${p.available ? "" : " (not set up)"}</option>`).join("");
+      sel.onchange = () => chooseProvider(sel.value);
+      updateAdvisorUi();
+      loadPast();
+      const status = await fetch("/api/advisor/status").then((r) => r.json());
+      if (status.state === "running") startPolling();
+      else if (status.state) showProgress(status);
+    }
+
+    function updateAdvisorUi() {
+      const p = current();
+      const isCustom = p?.id === "command";
+      $("#custom").classList.toggle("show", isCustom && !p.available);
+      $("#ask").textContent = `Ask ${p ? p.name : "the advisor"} for a plan`;
+      $("#ask").disabled = !p || !p.available || polling !== null;
+      $("#advnote").textContent = !p ? "" : p.available ? p.detail : isCustom ? "Set the command below." : `${p.name} was not found on this machine.`;
+    }
+
+    async function chooseProvider(id, custom) {
+      if (id === "command" && !custom) {
+        // Choose the entry first; the command itself is set with the fields below.
+        providers.forEach((p) => (p.selected = p.id === id));
+        const p = current();
+        if (p.available) { await saveProvider({ provider: id }); return; }
+        $("#custom").classList.add("show");
+        $("#ask").disabled = true;
+        $("#advnote").textContent = "Set the command below.";
+        return;
+      }
+      await saveProvider({ provider: id, ...(custom ?? {}) });
+    }
+
+    async function saveProvider(body) {
+      const r = await fetch("/api/advisor/provider", { method: "POST", headers: { "content-type": "application/json", "x-calvin-action": "1" }, body: JSON.stringify(body) });
+      if (!r.ok) { $("#advnote").textContent = (await r.json().catch(() => ({}))).error ?? "Could not save."; return; }
+      await initAdvisor();
+    }
+
+    $("#csave").onclick = () => chooseProvider("command", {
+      name: $("#cname").value.trim(),
+      program: $("#cprogram").value.trim(),
+      args: $("#cargs").value.trim() ? $("#cargs").value.trim().split(/\s+/) : [],
+    });
+
+    function showProgress(j) {
+      const box = $("#progress");
+      box.classList.add("show");
+      const secs = Math.round(j.elapsed_ms / 1000);
+      const now = j.state === "running"
+        ? `<div class="now"><span class="spinner"></span>${esc(j.provider)}: ${esc(j.phase)} · ${secs}s</div>`
+        : `<div class="now">${j.state === "done" ? "✓ " : ""}${esc(j.provider)}: ${esc(j.phase)}${j.cost_usd != null ? ` · $${j.cost_usd.toFixed(3)}` : ""}${j.duration_ms ? ` · ${Math.round(j.duration_ms / 1000)}s` : ""}</div>`;
+      box.innerHTML = now + `<ol>${j.steps.map((s) => `<li>${esc(s)}</li>`).join("")}</ol>`;
+      const plan = $("#plan");
+      plan.classList.toggle("error", j.state === "error");
+      plan.innerHTML = j.state === "error" && !j.text ? esc(j.error ?? "Something went wrong.") : j.text ? md(j.text) : "";
+    }
+
+    function startPolling() {
+      clearInterval(polling);
+      const tick = async () => {
+        const j = await fetch("/api/advisor/status").then((r) => r.json());
+        showProgress(j);
+        if (j.state !== "running") {
+          clearInterval(polling);
+          polling = null;
+          updateAdvisorUi();
+          loadPast();
+        }
+      };
+      polling = setInterval(tick, 800);
+      $("#ask").disabled = true;
+      tick();
+    }
+
+    $("#ask").onclick = async () => {
+      const r = await fetch(`/api/advisor/run?since=${range}`, { method: "POST", headers: { "x-calvin-action": "1" } });
+      if (!r.ok) { $("#advnote").textContent = (await r.json().catch(() => ({}))).error ?? "Could not start."; return; }
+      startPolling();
+    };
+
+    async function promptText() {
+      const p = await fetch(`/api/advisor/preview?since=${range}`).then((r) => r.json());
+      if (p.error) throw new Error(p.error);
+      return `${p.system}\n\n---\n\n${p.prompt}`;
+    }
+
+    function openDialog(title, text) {
+      $("#dtitle").textContent = title;
+      $("#dbody").textContent = text;
+      $("#dcopy").onclick = () => navigator.clipboard.writeText(text).catch(() => {});
+      $("#dialog").showModal();
+    }
+    $("#dclose").onclick = () => $("#dialog").close();
+
+    $("#preview").onclick = async () => {
+      try {
+        const text = await promptText();
+        openDialog(`What calvin sends to ${current()?.name ?? "the advisor"} (${text.length.toLocaleString()} characters; the tool adds its own context)`, text);
+      } catch (e) { $("#advnote").textContent = e.message; }
+    };
+    $("#copyprompt").onclick = async (e) => {
+      try {
+        await navigator.clipboard.writeText(await promptText());
+        e.target.textContent = "Copied ✓";
+        setTimeout(() => (e.target.textContent = "Copy as prompt"), 1500);
+      } catch (err) { $("#advnote").textContent = err.message; }
+    };
+
+    async function loadPast() {
+      const rows = await fetch("/api/advisor/reports").then((r) => r.json()).catch(() => []);
+      $("#past").innerHTML = rows.length
+        ? `<h4>Earlier plans</h4>${rows.map((r) => `<button data-id="${r.id}">${esc(new Date(r.created_at).toLocaleString())}<span>${esc(r.model ?? "")} · last ${esc(r.since)}${r.cost_usd != null ? ` · $${r.cost_usd.toFixed(3)}` : ""}${r.status !== "done" ? " · failed" : ""}</span></button>`).join("")}`
+        : "";
+      document.querySelectorAll("#past button").forEach((b) => (b.onclick = async () => {
+        const r = await fetch(`/api/advisor/report?id=${b.dataset.id}`).then((x) => x.json());
+        $("#progress").classList.remove("show");
+        const plan = $("#plan");
+        plan.classList.toggle("error", r.status !== "done");
+        plan.innerHTML = `<div class="meta">Plan from ${esc(new Date(r.created_at).toLocaleString())} · ${esc(r.model ?? "")} · last ${esc(r.since)}</div>` + (r.report ? md(r.report) : esc(r.error ?? ""));
+        plan.scrollIntoView({ behavior: "smooth", block: "start" });
+      }));
+    }
+
     const toggleTheme = () => {
       const r = document.documentElement;
       r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
@@ -173,6 +413,7 @@
     document.addEventListener("keydown", (e) => { if (e.key.toLowerCase() === "t" && !e.target.closest("input")) toggleTheme(); });
     document.documentElement.dataset.theme = localStorage.getItem("calvin-theme") ?? "dark";
     load();
+    initAdvisor();
   </script>
 </body>
 </html>
