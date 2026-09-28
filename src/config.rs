@@ -53,6 +53,11 @@ pub struct ClaudeCodeAdvisor {
     pub model: String,
     /// Spending cap per run, in USD.
     pub max_budget_usd: f64,
+    /// Let the advisor read the official documentation (web fetch and search only), so
+    /// its advice on features reflects the current version rather than its memory.
+    pub research: bool,
+    /// Where the tool's documentation index lives, for the advisor to read.
+    pub docs_index: String,
 }
 
 impl Default for ClaudeCodeAdvisor {
@@ -61,6 +66,8 @@ impl Default for ClaudeCodeAdvisor {
             program: "claude".into(),
             model: "claude-sonnet-5".into(),
             max_budget_usd: 1.0,
+            research: true,
+            docs_index: "https://code.claude.com/docs/llms.txt".into(),
         }
     }
 }
@@ -73,6 +80,8 @@ pub struct CommandAdvisor {
     pub name: String,
     pub program: String,
     pub args: Vec<String>,
+    /// Optional: the tool's documentation index, passed to it to read.
+    pub docs_index: String,
 }
 
 #[derive(Debug, Deserialize)]

@@ -29,8 +29,16 @@ Write a practical improvement plan in Markdown, specific to this person.\n\n\
 Structure:\n\
 1. **This week**: the 3 changes with the biggest effect, in order. For each: what to do, why (cite the numbers), and the expected effect.\n\
 2. **Drafts**: ready-to-use text for those changes, such as a CLAUDE.md starter for a named project, a rewritten skill description, a settings.json snippet, or a new skill outline. Base drafts on the evidence given; mark anything you had to assume.\n\
-3. **Patterns**: connections between findings (for example one project behind several problems).\n\
-4. **Later**: other items worth doing, one line each.\n\n\
+3. **Advanced features you don't use yet**: this section teaches capabilities the developer has never touched. Do not repeat \
+anything already covered by calvin's findings above (CLAUDE.md, subagent model, MCP servers, skills, shared settings, log \
+retention and so on are handled there). If an official documentation index is given, fetch it first and read the pages you \
+need, so the list reflects the current version, not your memory. Compare the section \"How you use ... today\" with that \
+feature set and pick 6 to 10 advanced features they don't use, for example hook events they haven't configured, remote \
+control, cloud sessions, headless and scripted runs, CI integration, scheduled routines, agent teams, output styles, \
+checkpoints and rewind, and anything else the tool offers. For each: what it is, exactly how to start (command, setting or \
+flag), and a concrete way it would help this developer, citing their data. Only name features you confirmed exist.\n\
+4. **Patterns**: connections between findings (for example one project behind several problems).\n\
+5. **Later**: other items worth doing, one line each.\n\n\
 Rules: use only the data provided and never invent numbers; say when data is too thin to conclude; keep it concise; \
 when the report gives an exact setting or command, use it verbatim and never make up settings keys or flags; \
 Claude Code features you mention must be real (CLAUDE.md, /init, /memory, skills, subagents via /agents, hooks via /hooks, \
@@ -155,6 +163,7 @@ pub fn build_prompt(
     skills: &[InstalledSkill],
     summary: &Summary,
     models: &[ModelRow],
+    inventory: &str,
 ) -> String {
     let mut s = String::new();
     s.push_str(&format!("# calvin report ({since_label})\n\n## Overview\n"));
@@ -181,6 +190,8 @@ pub fn build_prompt(
             efforts.join(", ")
         ));
     }
+    s.push('\n');
+    s.push_str(inventory);
     let describe = |name: &str| {
         skills
             .iter()
@@ -384,7 +395,18 @@ fn run_claude_code(
             "--verbose",
             "--include-partial-messages",
         ])
-        .args(["--tools", ""])
+        .args(if settings.research {
+            // Read-only research: fetch and search the web, nothing else. Allowed up front,
+            // since nobody is there to approve prompts.
+            vec![
+                "--tools",
+                "WebFetch,WebSearch",
+                "--allowedTools",
+                "WebFetch,WebSearch",
+            ]
+        } else {
+            vec!["--tools", ""]
+        })
         .args([
             "--no-session-persistence",
             "--strict-mcp-config",
@@ -479,6 +501,25 @@ fn apply(j: &mut Job, e: &Value) {
                     }
                 }
                 _ => {}
+            }
+        }
+        "assistant" => {
+            let blocks = e
+                .pointer("/message/content")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            for b in blocks {
+                if b.get("type").and_then(Value::as_str) != Some("tool_use") {
+                    continue;
+                }
+                let input = b.get("input").cloned().unwrap_or(Value::Null);
+                let what = input
+                    .get("url")
+                    .or_else(|| input.get("query"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("the documentation");
+                j.step(&format!("Checking the docs: {what}"));
             }
         }
         "result" => {

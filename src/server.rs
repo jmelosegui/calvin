@@ -753,12 +753,26 @@ fn advisor_prompt(st: &AppState, c: &Connection, since_text: &str) -> Result<Str
     let skills = installed_skills(st, c)?;
     let summary = insights::summary(c, &since)?;
     let models = insights::models(c, &since)?;
+    let mut inventory =
+        crate::inventory::collect(c, &since, &st.claude_dir)?.to_markdown("Claude Code");
+    let advisor = st.advisor.read().unwrap().clone();
+    let docs = match advisor.provider.as_str() {
+        "claude-code" if advisor.claude_code.research => advisor.claude_code.docs_index,
+        "command" => advisor.command.docs_index,
+        _ => String::new(),
+    };
+    if !docs.trim().is_empty() {
+        inventory.push_str(&format!(
+            "- Official documentation index: {docs} (fetch it for the current feature list)\n"
+        ));
+    }
     Ok(crate::advisor::build_prompt(
         &format!("last {since_text}"),
         &opportunities,
         &skills,
         &summary,
         &models,
+        &inventory,
     ))
 }
 
