@@ -26,6 +26,7 @@ use crate::{db, ingest, pack, prices::PriceTable, skills, update};
 const INDEX_HTML: &str = include_str!("../web/index.html");
 const SKILLS_HTML: &str = include_str!("../web/skills.html");
 const SESSIONS_HTML: &str = include_str!("../web/sessions.html");
+const OPPORTUNITIES_HTML: &str = include_str!("../web/opportunities.html");
 const STYLE_CSS: &str = include_str!("../web/style.css");
 /// SKILL.md previews are cut off beyond this.
 const PREVIEW_BYTES: usize = 200 * 1024;
@@ -137,6 +138,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route("/skills", get(|| async { html(SKILLS_HTML) }))
         .route("/sessions", get(|| async { html(SESSIONS_HTML) }))
+        .route("/opportunities", get(|| async { html(OPPORTUNITIES_HTML) }))
         .route(
             "/style.css",
             get(|| async {
@@ -162,6 +164,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/friction", get(friction))
         .route("/api/cache", get(cache))
         .route("/api/models", get(models))
+        .route("/api/opportunities", get(opportunities))
         .route("/api/live", get(live))
         .layer(middleware::from_fn_with_state(state.clone(), local_only))
         .with_state(state)
@@ -630,6 +633,24 @@ async fn models(
 ) -> ApiResult<Vec<insights::ModelRow>> {
     let since = p.since()?;
     read(&st, move |c| insights::models(c, &since)).await
+}
+
+async fn opportunities(
+    State(st): State<Arc<AppState>>,
+    Query(p): Query<Params>,
+) -> ApiResult<Vec<crate::opportunities::Opportunity>> {
+    let since = p.since()?;
+    let s = st.clone();
+    read(&st, move |c| {
+        let skills = installed_skills(&s, c)?;
+        let ctx = crate::opportunities::Context {
+            claude_dir: &s.claude_dir,
+            prices: &s.prices,
+            skills: &skills,
+        };
+        crate::opportunities::run(c, &since, &ctx)
+    })
+    .await
 }
 
 async fn live(

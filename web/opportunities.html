@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>calvin · Opportunities</title>
+  <link rel="icon" type="image/svg+xml" href="/logo.svg" />
+  <link rel="stylesheet" href="/style.css" />
+  <style>
+    .summary { display: flex; flex-wrap: wrap; gap: 36px; }
+    .summary div b { display: block; font-size: 32px; font-weight: 700; letter-spacing: -0.02em; }
+    .summary div span { font-size: 13px; color: var(--muted); }
+    .summary .saving b { color: var(--orange-ink); }
+
+    .group { grid-column: span 12; margin: 10px 0 -4px; }
+    .group h2 { margin: 0; font-size: 20px; }
+    .group p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+
+    .card { grid-column: span 6; display: flex; flex-direction: column; gap: 10px; }
+    @media (max-width: 1050px) { .card { grid-column: span 12; } }
+    .card.action { border-color: var(--orange); }
+    .card.good { border-color: var(--line-dim); }
+    .card .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .area { padding: 2px 8px; border: 1px solid var(--line-dim); border-radius: 6px; color: var(--muted); font-size: 12px; }
+    .save { margin-left: auto; padding: 2px 9px; border: 1.5px solid var(--orange); border-radius: 6px; color: var(--orange-ink); font: 700 12px "JetBrains Mono", monospace; }
+    .ok { margin-left: auto; color: var(--muted); font-size: 13px; }
+    .card h3 { margin: 0; font-size: 18px; font-weight: 600; }
+    .finding { font-size: 15px; line-height: 1.45; }
+    .why { color: var(--muted); font-size: 13.5px; line-height: 1.5; }
+    .fix { font-size: 14px; line-height: 1.5; }
+    .fix b { color: var(--orange-ink); font-weight: 600; }
+    .snip { display: flex; align-items: center; gap: 8px; }
+    .snip code {
+      flex: 1; min-width: 0; padding: 8px 12px; overflow: auto; white-space: nowrap; border: 1px solid var(--line-dim);
+      border-radius: 8px; font: 500 12.5px "JetBrains Mono", monospace;
+    }
+    .copy {
+      flex: none; display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: 1px solid var(--line-dim);
+      border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer;
+    }
+    .copy:hover, .copy.done { color: var(--orange); border-color: var(--orange); }
+    .copy svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+    .ev { margin: 2px 0 0; padding: 0; list-style: none; border-top: 1px dashed var(--line-dim); }
+    .ev li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 7px 0; border-bottom: 1px dashed var(--line-dim); font-size: 13px; }
+    .ev li .l { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ev li .d { color: var(--muted); text-align: right; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
+    .ev a { color: var(--text); text-decoration: underline; text-decoration-color: var(--line-dim); text-underline-offset: 3px; }
+    .ev a:hover { text-decoration-color: var(--orange); }
+    .ev li.more-row { cursor: pointer; color: var(--muted); display: block; }
+    .ev li.hidden { display: none; }
+  </style>
+</head>
+<body>
+  <header class="top">
+    <svg class="logo" viewBox="0 0 64 64" aria-label="calvin">
+      <line class="ln" x1="32" y1="15" x2="32" y2="8" />
+      <circle class="or" cx="32" cy="7" r="3.5" />
+      <rect class="ln" x="9" y="16" width="46" height="38" rx="11" />
+      <circle class="or" cx="32" cy="35" r="11" />
+      <circle class="pupil" cx="35.5" cy="31.5" r="3.4" />
+    </svg>
+    <nav class="nav"><a href="/">Prime Radiant</a><a href="/opportunities" class="active">Opportunities</a><a href="/sessions">Sessions</a><a href="/skills">Skills</a></nav>
+    <button class="icon-btn" id="theme" title="Toggle theme (T)">◐</button>
+  </header>
+
+  <div class="titlebar">
+    <h1>Your <span class="px">OPPORTUNITIES</span></h1>
+    <div class="actions">
+      <div class="seg" id="range">
+        <button data-r="7d">7d</button><button data-r="30d" class="active">30d</button><button data-r="90d">90d</button>
+      </div>
+    </div>
+  </div>
+
+  <main id="main"><section class="panel"><div class="empty">Checking your setup…</div></section></main>
+
+  <footer>Checked against your calvin data, Claude Code settings and the projects you worked in. Nothing is changed for you.</footer>
+
+  <script>
+    const $ = (s) => document.querySelector(s);
+    const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+    const money = (v) => "$" + (v >= 100 ? v.toFixed(0) : v.toFixed(2));
+    const COPY_ICON = `<svg viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>`;
+    const CHECK_ICON = `<svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>`;
+    const SHOWN = 4;
+    let range = "30d";
+    let items = [];
+
+    function card(o, i) {
+      const ev = o.evidence.map((e, n) => {
+        const label = e.link ? `<a href="${esc(e.link)}">${esc(e.label)}</a>` : esc(e.label);
+        return `<li class="${n >= SHOWN ? "hidden" : ""}"><span class="l" title="${esc(e.label)}">${label}</span><span class="d" title="${esc(e.detail ?? "")}">${esc(e.detail ?? "")}</span></li>`;
+      }).join("");
+      const more = o.evidence.length > SHOWN ? `<li class="more-row">Show ${o.evidence.length - SHOWN} more</li>` : "";
+      const badge = o.saving_usd ? `<span class="save">save ~${money(o.saving_usd)}</span>` : o.status === "good" ? `<span class="ok">✓ in place</span>` : "";
+      return `
+        <section class="panel card ${o.status}">
+          <div class="head"><span class="area">${esc(o.area)}</span>${badge}</div>
+          <h3>${esc(o.title)}</h3>
+          <div class="finding">${esc(o.finding)}</div>
+          ${o.status === "good" ? "" : `
+            <div class="why">${esc(o.why)}</div>
+            <div class="fix"><b>What to do:</b> ${esc(o.fix)}</div>
+            ${o.snippet ? `<div class="snip"><code>${esc(o.snippet)}</code><button class="copy" data-i="${i}" title="Copy" aria-label="Copy">${COPY_ICON}</button></div>` : ""}`}
+          ${ev ? `<ul class="ev">${ev}${more}</ul>` : ""}
+        </section>`;
+    }
+
+    function render() {
+      const by = (s) => items.filter((o) => o.status === s);
+      const actions = by("action"), consider = by("consider"), good = by("good");
+      const saving = items.reduce((t, o) => t + (o.saving_usd ?? 0), 0);
+      const group = (title, sub, list, offset) => list.length
+        ? `<div class="group"><h2>${title}</h2><p>${sub}</p></div>${list.map((o) => card(o, items.indexOf(o))).join("")}`
+        : "";
+      $("#main").innerHTML = `
+        <section class="panel">
+          <div class="summary">
+            <div><b>${actions.length}</b><span>worth doing</span></div>
+            <div><b>${consider.length}</b><span>worth a look</span></div>
+            <div><b>${good.length}</b><span>already in place</span></div>
+            ${saving ? `<div class="saving"><b>~${money(saving)}</b><span>could be saved in this period</span></div>` : ""}
+          </div>
+        </section>
+        ${group("Worth doing", "Clear wins, based on how you actually work.", actions)}
+        ${group("Worth a look", "Depends on how you like to work; here's what calvin noticed.", consider)}
+        ${group("Already in place", "Features you're already getting the benefit of.", good)}`;
+    }
+
+    async function load() {
+      $("#main").innerHTML = `<section class="panel"><div class="empty">Checking your setup…</div></section>`;
+      try {
+        const r = await fetch(`/api/opportunities?since=${range}`);
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? r.status);
+        items = await r.json();
+        render();
+      } catch (e) {
+        $("#main").innerHTML = `<section class="panel"><div class="empty error">${esc(e.message)}</div></section>`;
+      }
+    }
+
+    $("#main").addEventListener("click", async (e) => {
+      const more = e.target.closest(".more-row");
+      if (more) {
+        more.parentElement.querySelectorAll("li.hidden").forEach((li) => li.classList.remove("hidden"));
+        more.remove();
+        return;
+      }
+      const btn = e.target.closest(".copy");
+      if (!btn) return;
+      const text = items[+btn.dataset.i].snippet;
+      try {
+        await navigator.clipboard.writeText(text);
+        btn.innerHTML = CHECK_ICON;
+        btn.classList.add("done");
+        setTimeout(() => { btn.innerHTML = COPY_ICON; btn.classList.remove("done"); }, 1500);
+      } catch {
+        prompt("Copy this:", text);
+      }
+    });
+    document.querySelectorAll("#range button").forEach((b) => (b.onclick = () => {
+      range = b.dataset.r;
+      document.querySelectorAll("#range button").forEach((x) => x.classList.toggle("active", x === b));
+      load();
+    }));
+    const toggleTheme = () => {
+      const r = document.documentElement;
+      r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+      localStorage.setItem("calvin-theme", r.dataset.theme);
+    };
+    $("#theme").onclick = toggleTheme;
+    document.addEventListener("keydown", (e) => { if (e.key.toLowerCase() === "t" && !e.target.closest("input")) toggleTheme(); });
+    document.documentElement.dataset.theme = localStorage.getItem("calvin-theme") ?? "dark";
+    load();
+  </script>
+</body>
+</html>

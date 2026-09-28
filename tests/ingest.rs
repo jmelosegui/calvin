@@ -278,3 +278,27 @@ fn effort_is_recorded_per_request() {
             .any(|e| e.effort.as_deref() == Some("xhigh") && e.requests == 1)
     );
 }
+
+#[test]
+fn opportunities_run_on_the_fixture() {
+    let (tmp, claude) = fixture();
+    let mut conn = db::open_in_memory().unwrap();
+    ingest(&mut conn, &claude);
+    // A project folder the fixture session could have run in, without CLAUDE.md.
+    std::fs::create_dir_all(tmp.path().join("work/demo")).unwrap();
+    let prices = PriceTable::bundled();
+    let ctx = calvin::opportunities::Context {
+        claude_dir: &claude,
+        prices: &prices,
+        skills: &[],
+    };
+    let found = calvin::opportunities::run(&conn, &Since::all(), &ctx).unwrap();
+    let ids: Vec<_> = found.iter().map(|o| o.id).collect();
+    assert!(ids.contains(&"log-retention"));
+    assert!(ids.contains(&"hooks"));
+    // Sorted: actions before suggestions before things already in place.
+    let order: Vec<_> = found.iter().map(|o| o.status).collect();
+    let mut sorted = order.clone();
+    sorted.sort();
+    assert_eq!(order, sorted);
+}
