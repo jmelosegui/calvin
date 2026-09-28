@@ -50,6 +50,29 @@
     .ev li.more-row { cursor: pointer; color: var(--muted); display: block; }
     .ev li.hidden { display: none; }
 
+    /* ---------- table ---------- */
+    table.opps { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .opps th { padding: 8px 10px; text-align: left; font-size: 11px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--line-dim); white-space: nowrap; }
+    .opps td { padding: 11px 10px; border-bottom: 1px dashed var(--line-dim); vertical-align: middle; }
+    .opps tbody tr { cursor: pointer; }
+    .opps tbody tr:hover td { background: var(--btn); }
+    .opps th.num { text-align: right; }
+    .opps td.num { text-align: right; white-space: nowrap; font-family: "JetBrains Mono", monospace; font-size: 13px; color: var(--orange-ink); }
+    .opps .area-c { color: var(--muted); white-space: nowrap; }
+    .opps .title-c { font-weight: 600; min-width: 220px; }
+    .opps .find-c { color: var(--muted); max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .opps tr.good .title-c { font-weight: 500; color: var(--muted); }
+    .st { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; white-space: nowrap; border: 1.5px solid var(--line-dim); color: var(--muted); }
+    .st.action { border-color: var(--orange); color: var(--orange-ink); }
+    .st.good { border-color: transparent; }
+    svg.mini { width: 60px; height: 16px; overflow: visible; }
+    svg.mini polyline { fill: none; stroke: var(--orange); stroke-width: 1.5; stroke-linejoin: round; }
+    .odialog { max-width: 760px; }
+    .obody { display: flex; flex-direction: column; gap: 10px; padding: 18px 20px 22px; max-height: 70vh; overflow: auto; }
+    .obody .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .obody h3 { margin: 0; font-size: 20px; }
+    .obody h4 { margin: 8px 0 0; font-size: 13px; color: var(--muted); font-weight: 500; }
+
     /* ---------- advisor ---------- */
     .advisor { grid-column: span 12; }
     .adv-head { display: flex; gap: 20px; align-items: flex-start; }
@@ -154,6 +177,7 @@
 
   <footer>Checked against your calvin data, Claude Code settings and the projects you worked in. Nothing is changed for you.</footer>
 
+  <dialog id="odialog" class="odialog"><div class="dh"><b>Recommendation</b><button class="btn" id="oclose">Close</button></div><div class="obody" id="obody"></div></dialog>
   <dialog id="dialog"><div class="dh"><b id="dtitle"></b><button class="btn" id="dcopy">Copy</button><button class="btn" id="dclose">Close</button></div><pre id="dbody"></pre></dialog>
 
   <script>
@@ -194,34 +218,43 @@
         <span>${esc(o.metric.label)}: ${fmt(first)} → <span class="${better ? "better" : ""}">${fmt(last)}</span> since ${esc(pts[0].day)}</span></div>`;
     }
 
-    function card(o, i) {
-      const ev = o.evidence.map((e, n) => {
+    const STATUS = { action: "Worth doing", consider: "Worth a look", good: "In place" };
+
+    function evidenceList(o) {
+      if (!o.evidence.length) return "";
+      return `<ul class="ev">${o.evidence.map((e) => {
         const label = e.link ? `<a href="${esc(e.link)}">${esc(e.label)}</a>` : esc(e.label);
-        return `<li class="${n >= SHOWN ? "hidden" : ""}"><span class="l" title="${esc(e.label)}">${label}</span><span class="d" title="${esc(e.detail ?? "")}">${esc(e.detail ?? "")}</span></li>`;
-      }).join("");
-      const more = o.evidence.length > SHOWN ? `<li class="more-row">Show ${o.evidence.length - SHOWN} more</li>` : "";
-      const badge = o.saving_usd ? `<span class="save">save ~${money(o.saving_usd)}</span>` : o.status === "good" ? `<span class="ok">✓ in place</span>` : "";
+        return `<li><span class="l" title="${esc(e.label)}">${label}</span><span class="d" title="${esc(e.detail ?? "")}">${esc(e.detail ?? "")}</span></li>`;
+      }).join("")}</ul>`;
+    }
+
+    // Everything about one item, shown when its row is clicked.
+    function detail(o, i) {
       return `
-        <section class="panel card ${o.status}">
-          <div class="head"><span class="area">${esc(o.area)}</span>${badge}</div>
-          <h3>${esc(o.title)}</h3>
-          <div class="finding">${esc(o.finding)}</div>
-          ${trend(o)}
-          ${o.status === "good" ? "" : `
-            <div class="why">${esc(o.why)}</div>
-            <div class="fix"><b>What to do:</b> ${esc(o.fix)}</div>
-            ${o.snippet ? `<div class="snip"><code>${esc(o.snippet)}</code><button class="copy" data-i="${i}" title="Copy" aria-label="Copy">${COPY_ICON}</button></div>` : ""}`}
-          ${ev ? `<ul class="ev">${ev}${more}</ul>` : ""}
-        </section>`;
+        <div class="head"><span class="st ${o.status}">${STATUS[o.status]}</span><span class="area">${esc(o.area)}</span>${o.saving_usd ? `<span class="save">save ~${money(o.saving_usd)}</span>` : ""}</div>
+        <h3>${esc(o.title)}</h3>
+        <div class="finding">${esc(o.finding)}</div>
+        ${trend(o)}
+        ${o.status === "good" ? "" : `
+          <div class="why">${esc(o.why)}</div>
+          <div class="fix"><b>What to do:</b> ${esc(o.fix)}</div>
+          ${o.snippet ? `<div class="snip"><code>${esc(o.snippet)}</code><button class="copy" data-i="${i}" title="Copy" aria-label="Copy">${COPY_ICON}</button></div>` : ""}`}
+        ${o.evidence.length ? `<h4>Evidence</h4>${evidenceList(o)}` : ""}`;
+    }
+
+    function spark(o) {
+      const pts = (trends[o.id] ?? []).filter((p) => p.metric != null);
+      if (!o.metric || pts.length < 2) return "";
+      const vals = pts.map((p) => p.metric);
+      const min = Math.min(...vals), max = Math.max(...vals), span = max - min || 1;
+      const line = vals.map((v, n) => `${(n / (vals.length - 1)) * 60},${14 - ((v - min) / span) * 12}`).join(" ");
+      return `<svg class="mini" viewBox="0 0 60 16"><polyline points="${line}"/></svg>`;
     }
 
     function render() {
-      const by = (s) => items.filter((o) => o.status === s);
+      const by = (st) => items.filter((o) => o.status === st);
       const actions = by("action"), consider = by("consider"), good = by("good");
       const saving = items.reduce((t, o) => t + (o.saving_usd ?? 0), 0);
-      const group = (title, sub, list, offset) => list.length
-        ? `<div class="group"><h2>${title}</h2><p>${sub}</p></div>${list.map((o) => card(o, items.indexOf(o))).join("")}`
-        : "";
       $("#main").innerHTML = `
         <section class="panel">
           <div class="summary">
@@ -231,9 +264,26 @@
             ${saving ? `<div class="saving"><b>~${money(saving)}</b><span>could be saved in this period</span></div>` : ""}
           </div>
         </section>
-        ${group("Worth doing", "Clear wins, based on how you actually work.", actions)}
-        ${group("Worth a look", "Depends on how you like to work; here's what calvin noticed.", consider)}
-        ${group("Already in place", "Features you're already getting the benefit of.", good)}`;
+        <section class="panel">
+          <table class="opps">
+            <thead><tr><th>Status</th><th>Area</th><th>Opportunity</th><th>What calvin found</th><th class="num">Saving</th><th>Trend</th></tr></thead>
+            <tbody>${items.map((o, i) => `
+              <tr data-i="${i}" class="${o.status}">
+                <td><span class="st ${o.status}">${STATUS[o.status]}</span></td>
+                <td class="area-c">${esc(o.area)}</td>
+                <td class="title-c">${esc(o.title)}</td>
+                <td class="find-c" title="${esc(o.finding)}">${esc(o.finding)}</td>
+                <td class="num">${o.saving_usd ? `~${money(o.saving_usd)}` : ""}</td>
+                <td>${spark(o)}</td>
+              </tr>`).join("")}</tbody>
+          </table>
+          <p class="sub" style="margin:12px 0 0">Click a row for the full recommendation.</p>
+        </section>`;
+      document.querySelectorAll("table.opps tbody tr").forEach((tr) => (tr.onclick = () => {
+        const i = +tr.dataset.i;
+        $("#obody").innerHTML = detail(items[i], i);
+        $("#odialog").showModal();
+      }));
     }
 
     async function load() {
@@ -249,7 +299,8 @@
       }
     }
 
-    $("#main").addEventListener("click", async (e) => {
+    document.addEventListener("click", async (e) => {
+      if (!e.target.closest("#main, #odialog")) return;
       const more = e.target.closest(".more-row");
       if (more) {
         more.parentElement.querySelectorAll("li.hidden").forEach((li) => li.classList.remove("hidden"));
@@ -374,6 +425,9 @@
       $("#dialog").showModal();
     }
     $("#dclose").onclick = () => $("#dialog").close();
+    $("#oclose").onclick = () => $("#odialog").close();
+    // Click outside the pop-up to close it.
+    $("#odialog").addEventListener("click", (e) => { if (e.target.id === "odialog") $("#odialog").close(); });
 
     $("#preview").onclick = async () => {
       try {
