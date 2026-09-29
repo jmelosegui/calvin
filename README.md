@@ -14,8 +14,30 @@ loads them into a local SQLite database, and shows you:
 - **Skills that never trigger**, and prompts a skill should have caught
 - **Cost and cache hit rate** per day, project and model (estimated at API list price)
 - **Friction**: denied tool calls, interruptions, "no, that's wrong" replies
+- **Opportunities**: Claude Code features and habits you could be using and aren't
 
-> **Status:** early development. Works with Claude Code on Windows; no releases yet.
+![The calvin dashboard: headline numbers, spend per day, live activity, skill shelf and repeated prompts](assets/dashboard.png)
+
+> **Status:** v0.1.0 is out. Supports Claude Code on Windows, macOS and Linux.
+
+## The dashboard
+
+- **Prime Radiant**: the overview. Sessions, prompts, estimated cost, cache hit rate and
+  skills used for the last 7, 30 or 90 days; spend per day and per project; a live feed of
+  activity across your sessions; a skill shelf; prompts you keep typing; friction; and
+  which models did the work and at what effort. Keys: `space` pauses the live feed, `F` is
+  full screen, `T` switches light and dark, and `1` `2` `3` pick the period.
+- **Opportunities**: checks your history, Claude Code settings and projects for features
+  and habits worth adopting, each with what calvin found, why it matters, how to fix it and
+  the evidence. Trends show whether things are improving. **Ask for a plan** has an AI tool
+  of your choice turn the report into a prioritised plan with drafts you can use; earlier
+  plans are kept.
+- **Sessions**: browse and read past sessions, jump to the friction points in each (what
+  went wrong and what you said next), and copy a command to resume one in Claude Code.
+- **Skills**: every installed skill, grouped by where it comes from, with how often it
+  ran. Open its folder, copy its location, or tick several and pack them into one zip for a
+  colleague. The packer skips build folders, ignored files and likely secrets, and flags
+  anything that looks like a credential.
 
 ## Local only
 
@@ -45,7 +67,7 @@ curl -fsSL https://raw.githubusercontent.com/jmelosegui/calvin/main/docs/install
 ```
 
 The scripts download the latest release for your platform, verify its checksum, and put
-`calvin` in `%LOCALAPPDATA%\calvinin` (Windows) or `~/.local/bin` (macOS, Linux). Run them
+`calvin` in `%LOCALAPPDATA%\calvin\bin` (Windows) or `~/.local/bin` (macOS, Linux). Run them
 again to update; a running calvin is stopped and restarted for you.
 
 Prebuilt for Windows x64, Linux x64/arm64 (static) and macOS x64/arm64. Anything else, or
@@ -66,22 +88,28 @@ calvin stop    # stop it
 ```
 
 That's it. `calvin start` runs in the background and serves the dashboard at
-`http://127.0.0.1:1982`. Close the terminal and it keeps running until `calvin stop`.
+`http://127.0.0.1:1982` (or the next free port). Close the terminal and it keeps running
+until `calvin stop`. Use `calvin start --no-open` to skip the browser, or `--foreground` to
+run it in the terminal (for debugging or a service manager).
 
 Also available:
 
 ```sh
 calvin status                  # is it running, on which URL, how fresh the data is
 calvin open                    # reopen the dashboard in your browser
+calvin ingest                  # import new activity without starting the dashboard
 calvin                         # import and print a 30-day summary in the terminal
+calvin report                  # the same summary; every report takes --since
 calvin report skills           # skills the model ran
 calvin report commands         # slash commands you typed
-calvin report prompts          # prompts you keep typing
+calvin report prompts --min 3  # prompts you keep typing
 calvin report friction         # rejected / denied tool calls, interruptions, errors
 calvin report cache            # prompt-cache hit rate per model
 calvin report cost --by project --since 4w
 calvin doctor                  # what was detected, where, and log retention warnings
 ```
+
+`--since` accepts `7d`, `4w`, `3m`, `all` or a date such as `2026-09-01`. The default is `30d`.
 
 ## How it works
 
@@ -103,7 +131,7 @@ skill folders ─────────────────┘  │       
 
 | Harness | Status |
 |---|---|
-| Claude Code | planned for v0.1 |
+| Claude Code | supported since v0.1.0 |
 | Codex CLI, Gemini CLI, Copilot CLI, Cursor, Aider | contributions welcome |
 
 ## Configuration
@@ -111,30 +139,44 @@ skill folders ─────────────────┘  │       
 Optional. Everything works with defaults. `config.toml` lives in your OS config directory.
 
 ```toml
+[paths]
+claude_dir = "~/.claude"          # Claude Code's folder (or set CLAUDE_CONFIG_DIR)
+
 [skills]
 extra_paths = ["~/other/skills"]  # more places where skills are installed
+
+[updates]
+check = true                      # once a day, ask GitHub whether a newer calvin exists
 
 [advisor]                         # who writes plans on the Opportunities page
 provider = "claude-code"          # or "command"
 
 [advisor.claude-code]
+program = "claude"
 model = "claude-sonnet-5"
-max_budget_usd = 1.0
+max_budget_usd = 1.0              # spending cap per plan
+research = true                   # let it read the official docs (web fetch and search only)
+docs_index = "https://code.claude.com/docs/llms.txt"
 
 [advisor.command]                 # any tool: prompt on stdin, Markdown on stdout
-name = "My tool"
+name = "My tool"                  # shown on the button
 program = "my-tool"
 args = []
+docs_index = ""                   # optional: the tool's documentation index
 
-[prices.overrides]
-# "model-id" = { input = 0.0, output = 0.0 }   # USD per million tokens
+[prices.models]                   # USD per million tokens; overrides the built-in table
+# "model-id" = { input = 0.0, output = 0.0, cache_write_5m = 0.0, cache_write_1h = 0.0, cache_read = 0.0 }
 ```
+
+The advisor settings can also be changed from the Opportunities page. `CALVIN_CONFIG` and
+`CALVIN_DATA_DIR` override where the config file and the database live.
 
 ## Contributing
 
 The most useful contribution is a new harness adapter. Adapters ship with **hand-written,
-anonymised fixtures**. Never commit or attach real transcripts; use `calvin export --redact`
-when filing issues. Details in `CONTRIBUTING.md` (coming).
+anonymised fixtures**. Never commit or attach real transcripts, and redact anything you
+paste into an issue. [docs/claude-code-data.md](docs/claude-code-data.md) describes what
+Claude Code writes to disk and what calvin reads. Details in `CONTRIBUTING.md` (coming).
 
 ## License
 
