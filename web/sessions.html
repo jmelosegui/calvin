@@ -33,6 +33,11 @@
     .sessions .num.zero { color: var(--faint); }
     .sessions .when { white-space: nowrap; color: var(--muted); font-size: 13px; }
     .sessions .title { font-weight: 600; }
+    .provider {
+      display: inline-block; margin-left: 7px; padding: 1px 6px; border: 1px solid var(--line-dim);
+      border-radius: 5px; color: var(--muted); font-size: 10px; font-weight: 600; vertical-align: 1px;
+    }
+    .provider.copilot-cli { border-color: var(--orange); color: var(--orange-ink); }
     .sessions .first { margin-top: 2px; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis;
       display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
     .sessions .proj { color: var(--muted); font-size: 13px; white-space: nowrap; }
@@ -185,6 +190,8 @@
     // ---------- list ----------
     let range = "30d";
     let sessions = [];
+    let harness = "";
+    const harnessName = (id) => id === "copilot-cli" ? "Copilot CLI" : "Claude Code";
 
     function listView() {
       document.title = "calvin · Sessions";
@@ -194,6 +201,7 @@
           <div class="actions">
             <input class="search" id="q" type="search" placeholder="Search titles and prompts  ( / )" autocomplete="off" />
             <select id="project"><option value="">All projects</option></select>
+            <select id="harness"><option value="">All CLIs</option><option value="claude-code">Claude Code</option><option value="copilot-cli">Copilot CLI</option></select>
             <label class="only"><input type="checkbox" id="onlyfriction" /> With friction only</label>
             <div class="seg" id="range">
               <button data-r="7d">7d</button><button data-r="30d">30d</button><button data-r="90d">90d</button><button data-r="all">All</button>
@@ -207,6 +215,8 @@
       });
       $("#q").oninput = renderList;
       $("#project").onchange = renderList;
+      $("#harness").value = harness;
+      $("#harness").onchange = () => { harness = $("#harness").value; renderList(); };
       $("#onlyfriction").onchange = renderList;
       api(`/api/sessions?since=${range}`).then((rows) => {
         sessions = rows;
@@ -221,6 +231,7 @@
       const project = $("#project").value;
       const rows = sessions
         .filter((s) => !project || s.project === project)
+        .filter((s) => !harness || s.harness === harness)
         .filter((s) => !$("#onlyfriction").checked || s.friction > 0)
         .filter((s) => !q || [s.title, s.first_prompt, s.project, s.git_branch].some((v) => v && v.toLowerCase().includes(q)));
       if (!rows.length) {
@@ -237,7 +248,7 @@
           <tbody>${rows.map((s) => `
             <tr class="row" data-id="${esc(s.id)}">
               <td class="when">${when(s.started_at)}</td>
-              <td><div class="title">${esc(s.title || s.first_prompt || "(untitled)")}</div>${s.title && s.first_prompt ? `<div class="first">${esc(s.first_prompt)}</div>` : ""}</td>
+              <td><div class="title">${esc(s.title || s.first_prompt || "(untitled)")}<span class="provider ${esc(s.harness)}">${esc(harnessName(s.harness))}</span></div>${s.title && s.first_prompt ? `<div class="first">${esc(s.first_prompt)}</div>` : ""}</td>
               <td class="proj">${esc(s.project ?? "")}${s.git_branch ? `<small>${esc(s.git_branch)}</small>` : ""}</td>
               <td class="num">${s.prompts}</td>
               <td class="num">${s.tool_calls}</td>
@@ -392,7 +403,7 @@
       $("#view").innerHTML = `
         <main><section class="panel">
           <a class="back" href="#">← All sessions</a>
-          <h2 style="margin:12px 0 0;font-size:24px">${esc(s.title ?? "Untitled session")}</h2>
+          <h2 style="margin:12px 0 0;font-size:24px">${esc(s.title ?? "Untitled session")}<span class="provider ${esc(s.harness)}">${esc(harnessName(s.harness))}</span></h2>
           <p class="meta">${esc(s.project ?? "")}${s.git_branch ? ` · ${esc(s.git_branch)}` : ""}${s.started_at ? ` · ${when(s.started_at)}` : ""}${s.cwd ? ` · <span style="font-family:JetBrains Mono,monospace;font-size:12px">${esc(s.cwd)}</span>` : ""}</p>
           <div class="stats">
             <div><b>${prompts}</b><span>prompts</span></div>
