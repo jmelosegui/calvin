@@ -109,6 +109,8 @@ pub struct SkillsConfig {
 pub struct PathsConfig {
     /// Claude Code config directory (defaults to `~/.claude`).
     pub claude_dir: Option<PathBuf>,
+    /// GitHub Copilot CLI data directory (defaults to `~/.copilot`).
+    pub copilot_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -154,6 +156,15 @@ impl Config {
             return Ok(PathBuf::from(dir));
         }
         Ok(home()?.join(".claude"))
+    }
+
+    pub fn copilot_dir(&self) -> Result<PathBuf> {
+        Ok(self
+            .paths
+            .copilot_dir
+            .as_deref()
+            .map(expand_home)
+            .unwrap_or(home()?.join(".copilot")))
     }
 }
 

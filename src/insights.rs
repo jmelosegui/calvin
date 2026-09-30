@@ -50,6 +50,7 @@ pub struct Summary {
     pub commands: i64,
     pub requests: i64,
     pub cost_usd: f64,
+    pub ai_units: f64,
     pub unpriced_requests: i64,
     pub cache_hit_rate: Option<f64>,
     pub first_ts: Option<String>,
@@ -63,22 +64,31 @@ pub fn summary(conn: &Connection, since: &Since) -> Result<Summary> {
         [&since.0],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
+    let sessions: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sessions WHERE started_at >= ?1",
+        [&since.0],
+        |r| r.get(0),
+    )?;
     let s = conn.query_row(
-        "SELECT COUNT(DISTINCT session_id), COUNT(*), COALESCE(SUM(cost_usd), 0),
-                SUM(cost_usd IS NULL),
-                SUM(cache_read), SUM(input_tokens + cache_read + cache_write_5m + cache_write_1h),
-                MIN(ts), MAX(ts)
-         FROM requests WHERE ts >= ?1",
+        "SELECT COUNT(*), COALESCE(SUM(r.cost_usd), 0), COALESCE(SUM(r.ai_units), 0),
+                SUM(r.cost_usd IS NULL AND s.harness = 'claude-code'),
+                SUM(CASE WHEN s.harness = 'claude-code' THEN r.cache_read ELSE 0 END),
+                SUM(CASE WHEN s.harness = 'claude-code'
+                    THEN r.input_tokens + r.cache_read + r.cache_write_5m + r.cache_write_1h
+                    ELSE 0 END),
+                MIN(r.ts), MAX(r.ts)
+         FROM requests r JOIN sessions s ON s.id = r.session_id WHERE r.ts >= ?1",
         [&since.0],
         |r| {
             let read: Option<i64> = r.get(4)?;
             let total: Option<i64> = r.get(5)?;
             Ok(Summary {
-                sessions: r.get(0)?,
+                sessions,
                 prompts,
                 commands,
-                requests: r.get(1)?,
-                cost_usd: r.get(2)?,
+                requests: r.get(0)?,
+                cost_usd: r.get(1)?,
+                ai_units: r.get(2)?,
                 unpriced_requests: r.get::<_, Option<i64>>(3)?.unwrap_or(0),
                 cache_hit_rate: ratio(read, total),
                 first_ts: r.get(6)?,
@@ -87,6 +97,82 @@ pub fn summary(conn: &Connection, since: &Since) -> Result<Summary> {
         },
     )?;
     Ok(s)
+}
+
+#[derive(Debug, Serialize)]
+pub struct HarnessComparison {
+    pub harness: String,
+    pub sessions: i64,
+    pub prompts: i64,
+    pub commands: i64,
+    pub requests: i64,
+    pub tool_calls: i64,
+    pub tool_errors: i64,
+    pub files_touched: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cost_usd: Option<f64>,
+    pub ai_units: Option<f64>,
+}
+
+/// Shared, rate-friendly measures for comparing coding harnesses without conflating their
+/// provider-specific billing models.
+pub fn harness_comparison(conn: &Connection, since: &Since) -> Result<Vec<HarnessComparison>> {
+    let harnesses: Vec<String> = conn
+        .prepare("SELECT DISTINCT harness FROM sessions WHERE started_at >= ?1 ORDER BY harness")?
+        .query_map([&since.0], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    let mut out = Vec::with_capacity(harnesses.len());
+    for harness in harnesses {
+        let sessions = conn.query_row(
+            "SELECT COUNT(*) FROM sessions WHERE harness = ?2 AND started_at >= ?1",
+            params![since.0, harness],
+            |r| r.get(0),
+        )?;
+        let (prompts, commands) = conn.query_row(
+            "SELECT COALESCE(SUM(p.kind = 'prompt'), 0), COALESCE(SUM(p.kind = 'command'), 0)
+             FROM prompts p JOIN sessions s ON s.id = p.session_id
+             WHERE p.ts >= ?1 AND p.is_sidechain = 0 AND s.harness = ?2",
+            params![since.0, harness],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let (requests, input_tokens, output_tokens, cost_usd, ai_units) = conn.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(r.input_tokens), 0), COALESCE(SUM(r.output_tokens), 0),
+                    SUM(r.cost_usd), SUM(r.ai_units)
+             FROM requests r JOIN sessions s ON s.id = r.session_id
+             WHERE r.ts >= ?1 AND s.harness = ?2",
+            params![since.0, harness],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )?;
+        let (tool_calls, tool_errors) = conn.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(t.outcome = 'error'), 0)
+             FROM tool_calls t JOIN sessions s ON s.id = t.session_id
+             WHERE t.ts >= ?1 AND s.harness = ?2",
+            params![since.0, harness],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let files_touched = conn.query_row(
+            "SELECT COUNT(*) FROM session_files sf JOIN sessions s ON s.id = sf.session_id
+             WHERE s.started_at >= ?1 AND s.harness = ?2",
+            params![since.0, harness],
+            |r| r.get(0),
+        )?;
+        out.push(HarnessComparison {
+            harness,
+            sessions,
+            prompts,
+            commands,
+            requests,
+            tool_calls,
+            tool_errors,
+            files_touched,
+            input_tokens,
+            output_tokens,
+            cost_usd,
+            ai_units,
+        });
+    }
+    Ok(out)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -563,6 +649,7 @@ pub fn models(conn: &Connection, since: &Since) -> Result<Vec<ModelRow>> {
 #[derive(Debug, Serialize)]
 pub struct SessionRow {
     pub id: String,
+    pub harness: String,
     pub title: Option<String>,
     pub first_prompt: Option<String>,
     pub project: Option<String>,
@@ -572,6 +659,7 @@ pub struct SessionRow {
     pub prompts: i64,
     pub requests: i64,
     pub cost_usd: f64,
+    pub ai_units: f64,
     pub tool_calls: i64,
     /// Interruptions, rejected and denied tool calls.
     pub friction: i64,
@@ -581,13 +669,14 @@ pub struct SessionRow {
 pub fn sessions(conn: &Connection, since: &Since, limit: i64) -> Result<Vec<SessionRow>> {
     let rows = conn
         .prepare(
-            "SELECT s.id, s.title,
+            "SELECT s.id, s.harness, s.title,
                     (SELECT substr(text, 1, 200) FROM prompts p
                      WHERE p.session_id = s.id AND p.is_sidechain = 0 ORDER BY p.ts LIMIT 1),
                     s.project, s.git_branch, s.started_at, s.ended_at,
                     (SELECT COUNT(*) FROM prompts p WHERE p.session_id = s.id AND p.is_sidechain = 0),
                     (SELECT COUNT(*) FROM requests r WHERE r.session_id = s.id),
                     (SELECT COALESCE(SUM(cost_usd), 0) FROM requests r WHERE r.session_id = s.id),
+                    (SELECT COALESCE(SUM(ai_units), 0) FROM requests r WHERE r.session_id = s.id),
                     (SELECT COUNT(*) FROM tool_calls t WHERE t.session_id = s.id),
                     (SELECT COUNT(*) FROM friction f WHERE f.session_id = s.id)
              FROM sessions s
@@ -597,17 +686,19 @@ pub fn sessions(conn: &Connection, since: &Since, limit: i64) -> Result<Vec<Sess
         .query_map(params![since.0, limit], |r| {
             Ok(SessionRow {
                 id: r.get(0)?,
-                title: r.get(1)?,
-                first_prompt: r.get(2)?,
-                project: r.get(3)?,
-                git_branch: r.get(4)?,
-                started_at: r.get(5)?,
-                ended_at: r.get(6)?,
-                prompts: r.get(7)?,
-                requests: r.get(8)?,
-                cost_usd: r.get(9)?,
-                tool_calls: r.get(10)?,
-                friction: r.get(11)?,
+                harness: r.get(1)?,
+                title: r.get(2)?,
+                first_prompt: r.get(3)?,
+                project: r.get(4)?,
+                git_branch: r.get(5)?,
+                started_at: r.get(6)?,
+                ended_at: r.get(7)?,
+                prompts: r.get(8)?,
+                requests: r.get(9)?,
+                cost_usd: r.get(10)?,
+                ai_units: r.get(11)?,
+                tool_calls: r.get(12)?,
+                friction: r.get(13)?,
             })
         })?
         .filter(|r| r.as_ref().map_or(true, |s| s.prompts > 0 || s.requests > 0))

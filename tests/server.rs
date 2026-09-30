@@ -23,6 +23,7 @@ fn app() -> (tempfile::TempDir, axum::Router) {
         false,
         db_path,
         claude,
+        tmp.path().join("copilot"),
         SkillFolders::default(),
         PriceTable::bundled(),
         "secret".into(),
@@ -101,6 +102,20 @@ async fn summary_is_json_from_the_database() {
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(v["requests"], 3);
     assert_eq!(v["prompts"], 4);
+
+    let filtered = app
+        .clone()
+        .oneshot(get(
+            "/api/summary?since=all&harness=claude-code",
+            "127.0.0.1:1982",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(filtered.status(), StatusCode::OK);
+    let body = filtered.into_body().collect().await.unwrap().to_bytes();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["sessions"], 1);
+    assert_eq!(v["requests"], 3);
 
     let bad = app
         .oneshot(get("/api/summary?since=soon", "127.0.0.1:1982"))

@@ -129,14 +129,15 @@ fn main() -> Result<()> {
 
     match cli.command {
         Some(Command::Ingest) => {
-            let stats = ingest::ingest_claude_code(
+            let stats = ingest::ingest_all(
                 &mut conn,
                 &cfg.claude_dir()?,
+                &cfg.copilot_dir()?,
                 &prices,
                 &mut Bar::default(),
             )?;
             println!(
-                "Imported {} lines from {} of {} Claude Code log files.",
+                "Imported {} lines from {} of {} supported harness log files.",
                 stats.lines, stats.files_read, stats.files_seen
             );
             if stats.bad_lines > 0 {
@@ -151,9 +152,10 @@ fn main() -> Result<()> {
             since,
         }) => {
             let since = Since::parse(&since)?;
-            ingest::ingest_claude_code(
+            ingest::ingest_all(
                 &mut conn,
                 &cfg.claude_dir()?,
+                &cfg.copilot_dir()?,
                 &prices,
                 &mut Bar::default(),
             )?;
@@ -182,9 +184,10 @@ fn main() -> Result<()> {
             unreachable!()
         }
         None => {
-            ingest::ingest_claude_code(
+            ingest::ingest_all(
                 &mut conn,
                 &cfg.claude_dir()?,
+                &cfg.copilot_dir()?,
                 &prices,
                 &mut Bar::default(),
             )?;

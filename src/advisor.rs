@@ -24,12 +24,12 @@ use crate::skills::InstalledSkill;
 const TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 pub const SYSTEM_PROMPT: &str = "You are the advisor inside calvin, a local tool that studies how one developer uses \
-Claude Code. You receive calvin's deterministic report about this developer: findings, numbers and evidence. \
+Claude Code and GitHub Copilot CLI. You receive calvin's deterministic report about this developer: findings, numbers and evidence. \
 Write a practical improvement plan in Markdown, specific to this person.\n\n\
 Structure:\n\
 1. **This week**: the 3 changes with the biggest effect, in order. For each: what to do, why (cite the numbers), and the expected effect.\n\
 2. **Drafts**: ready-to-use text for those changes, such as a CLAUDE.md starter for a named project, a rewritten skill description, a settings.json snippet, or a new skill outline. Base drafts on the evidence given; mark anything you had to assume.\n\
-3. **Advanced features you don't use yet**: this section teaches capabilities the developer has never touched. Do not repeat \
+3. **Advanced features you don't use yet**: group this section by coding tool and teach capabilities the developer has never touched. Do not repeat \
 anything already covered by calvin's findings above (CLAUDE.md, subagent model, MCP servers, skills, shared settings, log \
 retention and so on are handled there). If an official documentation index is given, fetch it first and read the pages you \
 need, so the list reflects the current version, not your memory. Compare the section \"How you use ... today\" with that \
@@ -41,8 +41,9 @@ flag), and a concrete way it would help this developer, citing their data. Only 
 5. **Later**: other items worth doing, one line each.\n\n\
 Rules: use only the data provided and never invent numbers; say when data is too thin to conclude; keep it concise; \
 when the report gives an exact setting or command, use it verbatim and never make up settings keys or flags; \
-Claude Code features you mention must be real (CLAUDE.md, /init, /memory, skills, subagents via /agents, hooks via /hooks, \
-permissions, plan mode, /effort, /clear, MCP servers, settings.json).";
+Tool-specific features must be real and attributed to the correct CLI. Never compare Claude estimated USD with Copilot AI units \
+as if they were the same measure. Prefer shared AGENTS.md guidance for repositories used with both tools; keep CLAUDE.md for \
+Claude-specific guidance and import AGENTS.md with @AGENTS.md when both files are needed.";
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct Job {
@@ -171,6 +172,12 @@ pub fn build_prompt(
         "- {} sessions, {} prompts, {} slash commands, {} model requests\n- Estimated cost at API list price: ${:.2}\n",
         summary.sessions, summary.prompts, summary.commands, summary.requests, summary.cost_usd
     ));
+    if summary.ai_units > 0.0 {
+        s.push_str(&format!(
+            "- Copilot CLI AI units: {:.2}\n",
+            summary.ai_units
+        ));
+    }
     if let Some(rate) = summary.cache_hit_rate {
         s.push_str(&format!("- Prompt cache hit rate: {:.0}%\n", rate * 100.0));
     }

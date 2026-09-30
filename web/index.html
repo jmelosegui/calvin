@@ -25,6 +25,11 @@
   <div class="titlebar">
     <h1>How I work with the <span class="px">MODELS</span></h1>
     <div class="actions">
+      <div class="seg" id="harness">
+        <button data-harness="" class="active">All</button>
+        <button data-harness="claude-code">Claude Code</button>
+        <button data-harness="copilot-cli">Copilot CLI</button>
+      </div>
       <div class="seg" id="range">
         <button data-days="7">7d</button>
         <button data-days="30" class="active">30d</button>
@@ -38,7 +43,13 @@
   <main>
     <section class="panel kpis" id="kpis"></section>
 
-    <section class="panel span-8">
+    <section class="panel" id="comparisonPanel">
+      <h2>Claude Code and Copilot CLI</h2>
+      <p class="sub">Shared behavior is compared with rates. Billing stays tool-specific: estimated USD for Claude Code and AI units for Copilot CLI.</p>
+      <div class="hbars" id="comparison"></div>
+    </section>
+
+    <section class="panel span-8" id="costPanel">
       <h2>Spend per day</h2>
       <p class="sub">Estimated from token counts at API list price. Hover a bar for the day.</p>
       <svg id="costChart" viewBox="0 0 900 330"></svg>
@@ -120,21 +131,48 @@
     const hideTip = () => (tip.style.opacity = 0);
 
     let range = 30;
+    const selectedHarness = () => $("#harness button.active")?.dataset.harness ?? "";
 
     // ---------- KPIs ----------
     function renderKpis(s, skills) {
       const installed = skills.filter((k) => k.installed);
       const used = installed.filter((k) => k.model_runs + k.command_runs > 0).length;
       const cache = s.cache_hit_rate == null ? "–" : (s.cache_hit_rate * 100).toFixed(0) + "<small>%</small>";
+      const copilotOnly = selectedHarness() === "copilot-cli";
       $("#kpis").innerHTML = [
         ["Sessions", num(s.sessions), `${num(s.requests)} model requests`],
         ["Prompts", num(s.prompts), `plus ${num(s.commands)} slash commands`],
-        ["Est. cost", money(s.cost_usd), "at API list price"],
-        ["Cache hit rate", cache, "input tokens served from cache"],
+        copilotOnly
+          ? ["AI units", s.ai_units.toFixed(2), "reported by Copilot CLI"]
+          : ["Est. cost", money(s.cost_usd), "Claude API list-price estimate"],
+        copilotOnly
+          ? ["Cache hit rate", "–", "not comparable with Claude cache data"]
+          : ["Cache hit rate", cache, "Claude input served from cache"],
         ["Skills used", `${used}<small> of ${installed.length}</small>`, "installed skills that ran"],
       ]
         .map(([l, v, d]) => `<div class="kpi"><div class="eyebrow">${l}</div><div class="value">${v}</div><div class="delta">${d}</div></div>`)
         .join("");
+    }
+
+    function renderComparison(rows) {
+      if (!rows.length) {
+        $("#comparison").innerHTML = `<div class="empty">No supported CLI sessions in this period.</div>`;
+        return;
+      }
+      const name = (id) => id === "claude-code" ? "Claude Code" : id === "copilot-cli" ? "Copilot CLI" : id;
+      $("#comparison").innerHTML = rows.map((r) => {
+        const promptsPerSession = r.sessions ? ((r.prompts + r.commands) / r.sessions).toFixed(1) : "–";
+        const toolsPerSession = r.sessions ? (r.tool_calls / r.sessions).toFixed(1) : "–";
+        const errorRate = r.tool_calls ? `${((r.tool_errors / r.tool_calls) * 100).toFixed(1)}%` : "–";
+        const billing = r.harness === "claude-code"
+          ? `${money(r.cost_usd ?? 0)} estimated API cost`
+          : r.ai_units == null ? "AI-unit usage unavailable" : `${r.ai_units.toFixed(2)} AI units`;
+        return `<div class="bubble">
+          <q>${esc(name(r.harness))}</q>
+          <div class="meta">${num(r.sessions)} sessions · ${promptsPerSession} prompts/session · ${toolsPerSession} tools/session · ${errorRate} tool errors</div>
+          <div class="meta">${num(r.files_touched)} files touched · ${tok(r.output_tokens)} output tokens · ${esc(billing)}</div>
+        </div>`;
+      }).join("");
     }
 
     // ---------- cost chart ----------
@@ -331,10 +369,12 @@
 
     // ---------- load a range ----------
     async function load() {
-      const since = `since=${range}d`;
+      const harness = selectedHarness();
+      const since = `since=${range}d${harness ? `&harness=${encodeURIComponent(harness)}` : ""}`;
       try {
-        const [summary, cost, skills, prompts, projects, friction, models] = await Promise.all([
+        const [summary, comparison, cost, skills, prompts, projects, friction, models] = await Promise.all([
           api(`/api/summary?${since}`),
+          api(`/api/comparison?${since}`),
           api(`/api/cost?by=day&${since}`),
           api(`/api/skills?${since}`),
           api(`/api/prompts?min=3&limit=6&${since}`),
@@ -343,6 +383,8 @@
           api(`/api/models?${since}`),
         ]);
         renderKpis(summary, skills);
+        renderComparison(comparison);
+        $("#costPanel").style.display = harness === "copilot-cli" ? "none" : "";
         renderCost(cost);
         renderShelf(skills);
         renderPrompts(prompts);
@@ -424,6 +466,10 @@
 
     document.documentElement.dataset.theme = localStorage.getItem("calvin-theme") ?? "dark";
     document.querySelectorAll("#range button").forEach((b) => b.addEventListener("click", () => setRange(+b.dataset.days)));
+    document.querySelectorAll("#harness button").forEach((b) => b.addEventListener("click", () => {
+      document.querySelectorAll("#harness button").forEach((x) => x.classList.toggle("active", x === b));
+      load();
+    }));
     $("#pause").addEventListener("click", togglePause);
     $("#theme").addEventListener("click", toggleTheme);
     $("#fs").addEventListener("click", fullscreen);

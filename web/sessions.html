@@ -141,7 +141,7 @@
 
   <div id="view"></div>
 
-  <footer id="footer">Conversations come from your local Claude Code logs and never leave this machine.</footer>
+  <footer id="footer">Conversations come from your local Claude Code and Copilot CLI history and never leave this machine.</footer>
 
   <script>
     const $ = (s) => document.querySelector(s);
@@ -228,10 +228,12 @@
         return;
       }
       const total = rows.reduce((t, s) => t + s.cost_usd, 0);
+      const aiUnits = rows.reduce((t, s) => t + s.ai_units, 0);
+      const usage = [total ? `${money(total)} estimated Claude cost` : "", aiUnits ? `${aiUnits.toFixed(2)} Copilot AI units` : ""].filter(Boolean).join(" · ");
       $("#list").innerHTML = `
-        <p class="sub">${rows.length} session${rows.length === 1 ? "" : "s"} · ${money(total)} at API list price. Click one to read it.</p>
+        <p class="sub">${rows.length} session${rows.length === 1 ? "" : "s"}${usage ? ` · ${usage}` : ""}. Click one to read it.</p>
         <table class="sessions">
-          <thead><tr><th>When</th><th>Session</th><th>Project</th><th class="num">Prompts</th><th class="num">Tools</th><th class="num">Friction</th><th class="num">Length</th><th class="num">Cost</th></tr></thead>
+          <thead><tr><th>When</th><th>Session</th><th>Project</th><th class="num">Prompts</th><th class="num">Tools</th><th class="num">Friction</th><th class="num">Length</th><th class="num">Usage</th></tr></thead>
           <tbody>${rows.map((s) => `
             <tr class="row" data-id="${esc(s.id)}">
               <td class="when">${when(s.started_at)}</td>
@@ -241,7 +243,7 @@
               <td class="num">${s.tool_calls}</td>
               <td class="num ${s.friction ? "friction" : "zero"}">${s.friction ? `<a href="#${encodeURIComponent(s.id)}?friction" class="jump" title="Open at the first friction point">${s.friction}</a>` : 0}</td>
               <td class="num">${dur(span(s.started_at, s.ended_at))}</td>
-              <td class="num">${money(s.cost_usd)}</td>
+              <td class="num">${s.harness === "copilot-cli" ? `${s.ai_units.toFixed(2)} AIU` : money(s.cost_usd)}</td>
             </tr>`).join("")}</tbody>
         </table>`;
       document.querySelectorAll("tr.row").forEach((tr) => (tr.onclick = (e) => {
@@ -254,8 +256,8 @@
     const COPY_ICON = `<svg viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>`;
     const CHECK_ICON = `<svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>`;
 
-    // Claude Code keeps sessions per folder, so resuming means going back to that folder first.
     function resumeCommand(s) {
+      if (s.harness === "copilot-cli") return `/resume ${s.id.replace(/^copilot-cli:/, "")}`;
       const resume = `claude --resume ${s.id}`;
       if (!s.cwd) return resume;
       if (/^[A-Za-z]:[\\/]/.test(s.cwd) || s.cwd.startsWith("\\\\")) {
@@ -396,9 +398,9 @@
             <div><b>${prompts}</b><span>prompts</span></div>
             <div><b>${toolCount}</b><span>tool calls</span></div>
             <div><b>${dur(span(s.started_at, s.ended_at)) || "–"}</b><span>from first to last message</span></div>
-            <div><b>${money(s.cost_usd)}</b><span>at API list price${s.subagent_cost_usd ? `, ${money(s.subagent_cost_usd)} of it in subagents` : ""}</span></div>
+            <div><b>${s.harness === "copilot-cli" ? `${s.ai_units.toFixed(2)} AIU` : money(s.cost_usd)}</b><span>${s.harness === "copilot-cli" ? "reported by Copilot CLI" : `at API list price${s.subagent_cost_usd ? `, ${money(s.subagent_cost_usd)} of it in subagents` : ""}`}</span></div>
           </div>
-          <div class="resume" title="Paste into a terminal to pick this session up again in Claude Code">
+          <div class="resume" title="${s.harness === "copilot-cli" ? "Paste into Copilot CLI" : "Paste into a terminal to resume in Claude Code"}">
             <span class="lbl">Resume</span><code id="resumecmd">${esc(resumeCommand(s))}</code>
             <button class="copy" id="copyresume" title="Copy command" aria-label="Copy command">${COPY_ICON}</button>
           </div>

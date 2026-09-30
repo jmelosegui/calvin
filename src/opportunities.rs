@@ -86,28 +86,52 @@ pub struct Context<'a> {
 }
 
 pub fn run(conn: &Connection, since: &Since, ctx: &Context) -> Result<Vec<Opportunity>> {
+    let mut out = vec![
+        shared_agents_md(conn, since)?,
+        copilot_project_instructions(conn, since)?,
+    ];
+    conn.execute_batch(
+        "CREATE TEMP VIEW sessions AS SELECT * FROM main.sessions WHERE harness = 'claude-code';
+         CREATE TEMP VIEW prompts AS SELECT p.* FROM main.prompts p
+            JOIN main.sessions s ON s.id = p.session_id WHERE s.harness = 'claude-code';
+         CREATE TEMP VIEW requests AS SELECT r.* FROM main.requests r
+            JOIN main.sessions s ON s.id = r.session_id WHERE s.harness = 'claude-code';
+         CREATE TEMP VIEW tool_calls AS SELECT t.* FROM main.tool_calls t
+            JOIN main.sessions s ON s.id = t.session_id WHERE s.harness = 'claude-code';
+         CREATE TEMP VIEW friction AS SELECT f.* FROM main.friction f
+            JOIN main.sessions s ON s.id = f.session_id WHERE s.harness = 'claude-code';",
+    )?;
     let settings = Settings::load(ctx.claude_dir);
     let user_config = read_json(&home_config(ctx.claude_dir));
-    let projects = project_stats(conn, since)?;
-
-    let mut out = vec![
-        claude_md(&projects),
-        personal_memory(ctx.claude_dir),
-        subagent_model(conn, since, ctx, &settings)?,
-        custom_agents(conn, since, ctx.claude_dir, &projects)?,
-        effort(conn, since, &settings)?,
-        mcp_servers(conn, since, &user_config, &projects)?,
-        unused_skills(conn, since, ctx.skills)?,
-        skills_model_skips(conn, since, ctx.skills)?,
-        repeated_prompts(conn, since)?,
-        permission_friction(conn, since)?,
-        shared_settings(&projects),
-        hooks(&settings, &projects),
-        plan_mode(conn, since)?,
-        long_sessions(conn, since)?,
-        log_retention(&settings),
-        status_line(&settings),
-    ];
+    let provider = (|| -> Result<Vec<Opportunity>> {
+        let projects = project_stats(conn, since)?;
+        Ok(vec![
+            claude_md(&projects),
+            personal_memory(ctx.claude_dir),
+            subagent_model(conn, since, ctx, &settings)?,
+            custom_agents(conn, since, ctx.claude_dir, &projects)?,
+            effort(conn, since, &settings)?,
+            mcp_servers(conn, since, &user_config, &projects)?,
+            unused_skills(conn, since, ctx.skills)?,
+            skills_model_skips(conn, since, ctx.skills)?,
+            repeated_prompts(conn, since)?,
+            permission_friction(conn, since)?,
+            shared_settings(&projects),
+            hooks(&settings, &projects),
+            plan_mode(conn, since)?,
+            long_sessions(conn, since)?,
+            log_retention(&settings),
+            status_line(&settings),
+        ])
+    })();
+    conn.execute_batch(
+        "DROP VIEW temp.friction;
+         DROP VIEW temp.tool_calls;
+         DROP VIEW temp.requests;
+         DROP VIEW temp.prompts;
+         DROP VIEW temp.sessions;",
+    )?;
+    out.extend(provider?);
     out.retain(|o| !o.title.is_empty());
     // Actions first, biggest saving first, then by id: the same inputs always give the
     // same order.
@@ -274,6 +298,155 @@ fn project_evidence(p: &Project) -> Evidence {
         )),
         link: None,
     }
+}
+
+fn shared_agents_md(conn: &Connection, since: &Since) -> Result<Opportunity> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT s.cwd, s.harness FROM sessions s
+         WHERE s.cwd IS NOT NULL AND s.started_at >= ?1
+           AND s.harness IN ('claude-code', 'copilot-cli')",
+    )?;
+    let mut roots: BTreeMap<PathBuf, HashSet<String>> = BTreeMap::new();
+    for row in stmt.query_map([&since.0], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })? {
+        let (cwd, harness) = row?;
+        let path = PathBuf::from(cwd);
+        if path.is_dir() {
+            roots.entry(repo_root(&path)).or_default().insert(harness);
+        }
+    }
+    let shared: Vec<PathBuf> = roots
+        .into_iter()
+        .filter(|(_, harnesses)| harnesses.len() == 2)
+        .map(|(root, _)| root)
+        .collect();
+    if shared.is_empty() {
+        return Ok(skip());
+    }
+
+    let mut needs_work = Vec::new();
+    let mut consolidated = 0usize;
+    for root in &shared {
+        let agents = root.join("AGENTS.md");
+        let claude = root.join("CLAUDE.md");
+        let imports_agents = std::fs::read_to_string(&claude)
+            .is_ok_and(|text| text.lines().any(|line| line.trim() == "@AGENTS.md"));
+        if agents.is_file() && (!claude.is_file() || imports_agents) {
+            consolidated += 1;
+        } else {
+            needs_work.push(root);
+        }
+    }
+    let missing = shared.len() - consolidated;
+    Ok(Opportunity {
+        id: "shared-agents-md",
+        area: "Cross-tool",
+        status: if missing == 0 {
+            Status::Good
+        } else {
+            Status::Action
+        },
+        title: "Keep shared project instructions in AGENTS.md".into(),
+        finding: if missing == 0 {
+            format!(
+                "All {} projects used with both Claude Code and Copilot CLI have one shared instruction source.",
+                shared.len()
+            )
+        } else {
+            format!(
+                "{missing} of {} projects used with both tools duplicate instructions or do not have a canonical AGENTS.md.",
+                shared.len()
+            )
+        },
+        why: "Both CLIs understand AGENTS.md. Keeping build, test, architecture and coding conventions there prevents the two tools from receiving different project guidance.".into(),
+        fix: "Move shared instructions into AGENTS.md. If Claude-specific guidance remains, keep a small CLAUDE.md that starts with @AGENTS.md and contains only the Claude-specific section; otherwise remove CLAUDE.md.".into(),
+        snippet: Some("@AGENTS.md\n\n## Claude Code\n\n<!-- Claude-specific guidance only -->".into()),
+        saving_usd: None,
+        evidence: needs_work
+            .iter()
+            .take(12)
+            .map(|root| Evidence {
+                label: root
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| root.display().to_string()),
+                detail: Some(root.display().to_string()),
+                link: None,
+            })
+            .collect(),
+        metric: Metric::lower(missing as f64, "cross-tool projects needing consolidation"),
+    })
+}
+
+fn copilot_project_instructions(conn: &Connection, since: &Since) -> Result<Opportunity> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT cwd FROM sessions
+         WHERE harness = 'copilot-cli' AND cwd IS NOT NULL AND started_at >= ?1",
+    )?;
+    let mut roots = BTreeMap::<PathBuf, ()>::new();
+    for row in stmt.query_map([&since.0], |r| r.get::<_, String>(0))? {
+        let path = PathBuf::from(row?);
+        if path.is_dir() {
+            roots.insert(repo_root(&path), ());
+        }
+    }
+    if roots.is_empty() {
+        return Ok(skip());
+    }
+    let has_instructions = |root: &Path| {
+        [
+            "AGENTS.md",
+            "CLAUDE.md",
+            "GEMINI.md",
+            ".github/copilot-instructions.md",
+        ]
+        .iter()
+        .any(|file| root.join(file).is_file())
+    };
+    let missing: Vec<&PathBuf> = roots
+        .keys()
+        .filter(|root| !has_instructions(root))
+        .collect();
+    Ok(Opportunity {
+        id: "copilot-project-instructions",
+        area: "Copilot CLI",
+        status: if missing.is_empty() {
+            Status::Good
+        } else {
+            Status::Action
+        },
+        title: "Give Copilot CLI persistent project instructions".into(),
+        finding: if missing.is_empty() {
+            format!(
+                "All {} projects used with Copilot CLI have an instruction file.",
+                roots.len()
+            )
+        } else {
+            format!(
+                "{} of {} projects used with Copilot CLI have no recognized project instruction file.",
+                missing.len(),
+                roots.len()
+            )
+        },
+        why: "Without project instructions, Copilot has to rediscover build commands, conventions and architecture in each session, increasing tool use and inconsistent changes.".into(),
+        fix: "Run /init in Copilot CLI, then keep shared guidance in AGENTS.md. Use Copilot-specific instruction files only for guidance that should not apply to Claude Code.".into(),
+        snippet: Some("/init".into()),
+        saving_usd: None,
+        evidence: missing
+            .iter()
+            .take(12)
+            .map(|root| Evidence {
+                label: root
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| root.display().to_string()),
+                detail: Some(root.display().to_string()),
+                link: None,
+            })
+            .collect(),
+        metric: Metric::lower(missing.len() as f64, "Copilot projects without instructions"),
+    })
 }
 
 // ---------------------------------------------------------------------------------------

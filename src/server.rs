@@ -62,6 +62,7 @@ pub struct AppState {
     pub check_updates: bool,
     pub db_path: PathBuf,
     pub claude_dir: PathBuf,
+    pub copilot_dir: PathBuf,
     pub skill_folders: SkillFolders,
     skill_index: Mutex<Option<Vec<skills::InstalledSkill>>>,
     /// Which AI tool writes plans; can change from the Opportunities page.
@@ -89,6 +90,7 @@ impl AppState {
         check_updates: bool,
         db_path: PathBuf,
         claude_dir: PathBuf,
+        copilot_dir: PathBuf,
         skill_folders: SkillFolders,
         prices: PriceTable,
         token: String,
@@ -99,6 +101,7 @@ impl AppState {
             check_updates,
             db_path,
             claude_dir,
+            copilot_dir,
             skill_folders,
             skill_index: Mutex::new(None),
             advisor: RwLock::new(crate::config::AdvisorConfig::default()),
@@ -163,6 +166,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/status", get(status))
         .route("/api/shutdown", post(shutdown))
         .route("/api/summary", get(summary))
+        .route("/api/comparison", get(comparison))
         .route("/api/cost", get(cost))
         .route("/api/sessions", get(session_list))
         .route("/api/sessions/detail", get(session_detail))
@@ -226,9 +230,10 @@ pub async fn sync_loop(st: Arc<AppState>) {
         let s = st.clone();
         let result = tokio::task::spawn_blocking(move || -> Result<usize> {
             let mut conn = db::open(&s.db_path)?;
-            Ok(ingest::ingest_claude_code(
+            Ok(ingest::ingest_all(
                 &mut conn,
                 &s.claude_dir,
+                &s.copilot_dir,
                 &s.prices,
                 &mut StopOnShutdown(&s),
             )?
@@ -318,6 +323,49 @@ where
     }
 }
 
+async fn read_harness<T, F>(st: &AppState, harness: Option<String>, f: F) -> ApiResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce(&Connection) -> Result<T> + Send + 'static,
+{
+    let path = st.db_path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+            let conn = db::open_read(&path)?;
+            if let Some(harness) = harness {
+                let value = match harness.as_str() {
+                    "claude-code" => "claude-code",
+                    "copilot-cli" => "copilot-cli",
+                    _ => anyhow::bail!("unknown harness '{harness}'"),
+                };
+                conn.execute_batch(&format!(
+                    "CREATE TEMP VIEW sessions AS SELECT * FROM main.sessions WHERE harness = '{value}';
+                     CREATE TEMP VIEW prompts AS SELECT p.* FROM main.prompts p
+                        JOIN main.sessions s ON s.id = p.session_id WHERE s.harness = '{value}';
+                     CREATE TEMP VIEW requests AS SELECT r.* FROM main.requests r
+                        JOIN main.sessions s ON s.id = r.session_id WHERE s.harness = '{value}';
+                     CREATE TEMP VIEW tool_calls AS SELECT t.* FROM main.tool_calls t
+                        JOIN main.sessions s ON s.id = t.session_id WHERE s.harness = '{value}';
+                     CREATE TEMP VIEW friction AS SELECT f.* FROM main.friction f
+                        JOIN main.sessions s ON s.id = f.session_id WHERE s.harness = '{value}';
+                     CREATE TEMP VIEW session_files AS SELECT f.* FROM main.session_files f
+                        JOIN main.sessions s ON s.id = f.session_id WHERE s.harness = '{value}';
+                     CREATE TEMP VIEW session_refs AS SELECT r.* FROM main.session_refs r
+                        JOIN main.sessions s ON s.id = r.session_id WHERE s.harness = '{value}';"
+                ))?;
+            }
+            f(&conn)
+        })
+        .await;
+    match result {
+        Ok(Ok(v)) => Ok(Json(v)),
+        Ok(Err(e)) => Err(ApiError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{e:#}"),
+        )),
+        Err(e) => Err(ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    }
+}
+
 #[derive(Deserialize)]
 struct Params {
     since: Option<String>,
@@ -327,6 +375,7 @@ struct Params {
     by: Option<String>,
     min: Option<i64>,
     limit: Option<i64>,
+    harness: Option<String>,
 }
 
 impl Params {
@@ -375,7 +424,15 @@ async fn summary(
     Query(p): Query<Params>,
 ) -> ApiResult<insights::Summary> {
     let since = p.since()?;
-    read(&st, move |c| insights::summary(c, &since)).await
+    read_harness(&st, p.harness, move |c| insights::summary(c, &since)).await
+}
+
+async fn comparison(
+    State(st): State<Arc<AppState>>,
+    Query(p): Query<Params>,
+) -> ApiResult<Vec<insights::HarnessComparison>> {
+    let since = p.since()?;
+    read(&st, move |c| insights::harness_comparison(c, &since)).await
 }
 
 async fn cost(
@@ -394,7 +451,7 @@ async fn cost(
             ));
         }
     };
-    read(&st, move |c| insights::cost(c, &since, by)).await
+    read_harness(&st, p.harness, move |c| insights::cost(c, &since, by)).await
 }
 
 async fn skill_usage(
@@ -403,7 +460,7 @@ async fn skill_usage(
 ) -> ApiResult<Vec<insights::SkillUsage>> {
     let since = p.since()?;
     let s = st.clone();
-    read(&st, move |c| {
+    read_harness(&st, p.harness, move |c| {
         let installed = installed_skills(&s, c)?;
         insights::skill_usage(c, &since, &installed)
     })
@@ -419,7 +476,10 @@ async fn session_list(
 ) -> ApiResult<Vec<insights::SessionRow>> {
     let since = p.since()?;
     let limit = p.limit.unwrap_or(500).clamp(1, 5000);
-    read(&st, move |c| insights::sessions(c, &since, limit)).await
+    read_harness(&st, p.harness, move |c| {
+        insights::sessions(c, &since, limit)
+    })
+    .await
 }
 
 async fn session_detail(
@@ -429,7 +489,7 @@ async fn session_detail(
     let Some(id) = p.id.clone() else {
         return Err(ApiError(StatusCode::BAD_REQUEST, "missing ?id=".into()));
     };
-    read(&st, move |c| {
+    read_harness(&st, p.harness, move |c| {
         crate::timeline::session(c, &id)?.ok_or_else(|| anyhow::anyhow!("no session with id {id}"))
     })
     .await
@@ -634,7 +694,7 @@ async fn friction(
     Query(p): Query<Params>,
 ) -> ApiResult<insights::Friction> {
     let since = p.since()?;
-    read(&st, move |c| insights::friction(c, &since)).await
+    read_harness(&st, p.harness, move |c| insights::friction(c, &since)).await
 }
 
 async fn cache(
@@ -642,7 +702,7 @@ async fn cache(
     Query(p): Query<Params>,
 ) -> ApiResult<Vec<insights::CacheRow>> {
     let since = p.since()?;
-    read(&st, move |c| insights::cache(c, &since)).await
+    read_harness(&st, p.harness, move |c| insights::cache(c, &since)).await
 }
 
 async fn models(
@@ -650,7 +710,7 @@ async fn models(
     Query(p): Query<Params>,
 ) -> ApiResult<Vec<insights::ModelRow>> {
     let since = p.since()?;
-    read(&st, move |c| insights::models(c, &since)).await
+    read_harness(&st, p.harness, move |c| insights::models(c, &since)).await
 }
 
 async fn opportunities(
@@ -755,6 +815,12 @@ fn advisor_prompt(st: &AppState, c: &Connection, since_text: &str) -> Result<Str
     let models = insights::models(c, &since)?;
     let mut inventory =
         crate::inventory::collect(c, &since, &st.claude_dir)?.to_markdown("Claude Code");
+    inventory.push('\n');
+    inventory.push_str(&crate::inventory::copilot_markdown(
+        c,
+        &since,
+        &st.copilot_dir,
+    )?);
     let advisor = st.advisor.read().unwrap().clone();
     let docs = match advisor.provider.as_str() {
         "claude-code" if advisor.claude_code.research => advisor.claude_code.docs_index,
