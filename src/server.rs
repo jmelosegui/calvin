@@ -507,6 +507,7 @@ fn installed_skills(st: &AppState, conn: &Connection) -> Result<Vec<skills::Inst
 fn scan_skills(st: &AppState, conn: &Connection) -> Result<Vec<skills::InstalledSkill>> {
     Ok(skills::installed(&skills::Locations {
         claude_dir: st.claude_dir.clone(),
+        copilot_dir: st.copilot_dir.clone(),
         project_dirs: insights::project_dirs(conn)?,
         extra: st.skill_folders.extra.clone(),
     }))

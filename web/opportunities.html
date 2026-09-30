@@ -144,6 +144,12 @@
   <div class="titlebar">
     <h1>Your <span class="px">OPPORTUNITIES</span></h1>
     <div class="actions">
+      <div class="seg" id="scope">
+        <button data-scope="" class="active">All CLIs</button>
+        <button data-scope="claude-code">Claude Code</button>
+        <button data-scope="copilot-cli">Copilot CLI</button>
+        <button data-scope="cross-tool">Cross-tool</button>
+      </div>
       <div class="seg" id="range">
         <button data-r="7d">7d</button><button data-r="30d" class="active">30d</button><button data-r="90d">90d</button>
       </div>
@@ -179,7 +185,7 @@
 
   <main id="main"><section class="panel"><div class="empty">Checking your setup…</div></section></main>
 
-  <footer>Checked against your calvin data, Claude Code settings and the projects you worked in. Nothing is changed for you.</footer>
+  <footer>Checked against your local Claude Code and Copilot CLI data, settings and projects. Nothing is changed for you.</footer>
 
   <dialog id="odialog" class="odialog"><div class="dh"><b>Recommendation</b><button class="btn" id="oclose">Close</button></div><div class="obody" id="obody"></div></dialog>
   <dialog id="dialog"><div class="dh"><b id="dtitle"></b><button class="btn" id="dcopy">Copy</button><button class="btn" id="dclose">Close</button></div><pre id="dbody"></pre></dialog>
@@ -192,6 +198,7 @@
     const CHECK_ICON = `<svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>`;
     const SHOWN = 4;
     let range = "30d";
+    let selectedScope = "";
     let items = [];
     let trends = {};
 
@@ -223,6 +230,9 @@
     }
 
     const STATUS = { action: "Worth doing", consider: "Worth a look", good: "In place" };
+    const scopeOf = (o) => o.area === "Copilot CLI" ? "copilot-cli" : o.area === "Cross-tool" ? "cross-tool" : "claude-code";
+    const SCOPE = { "claude-code": "Claude Code", "copilot-cli": "Copilot CLI", "cross-tool": "Cross-tool" };
+    const visibleItems = () => items.filter((o) => !selectedScope || scopeOf(o) === selectedScope);
 
     function evidenceList(o) {
       if (!o.evidence.length) return "";
@@ -235,7 +245,7 @@
     // Everything about one item, shown when its row is clicked.
     function detail(o, i) {
       return `
-        <div class="head"><span class="st ${o.status}">${STATUS[o.status]}</span><span class="area">${esc(o.area)}</span>${o.saving_usd ? `<span class="save">save ~${money(o.saving_usd)}</span>` : ""}</div>
+        <div class="head"><span class="st ${o.status}">${STATUS[o.status]}</span><span class="area">${esc(SCOPE[scopeOf(o)])}</span><span class="area">${esc(o.area)}</span>${o.saving_usd ? `<span class="save">save ~${money(o.saving_usd)}</span>` : ""}</div>
         <h3>${esc(o.title)}</h3>
         <div class="finding">${esc(o.finding)}</div>
         ${trend(o)}
@@ -256,9 +266,10 @@
     }
 
     function render() {
-      const by = (st) => items.filter((o) => o.status === st);
+      const shown = visibleItems();
+      const by = (st) => shown.filter((o) => o.status === st);
       const actions = by("action"), consider = by("consider"), good = by("good");
-      const saving = items.reduce((t, o) => t + (o.saving_usd ?? 0), 0);
+      const saving = shown.reduce((t, o) => t + (o.saving_usd ?? 0), 0);
       $("#main").innerHTML = `
         <section class="panel">
           <div class="summary">
@@ -270,16 +281,19 @@
         </section>
         <section class="panel">
           <table class="opps">
-            <thead><tr><th>Status</th><th>Area</th><th>Opportunity</th><th>What calvin found</th><th class="num">Saving</th><th>Trend</th></tr></thead>
-            <tbody>${items.map((o, i) => `
+            <thead><tr><th>Status</th><th>CLI</th><th>Area</th><th>Opportunity</th><th>What calvin found</th><th class="num">Saving</th><th>Trend</th></tr></thead>
+            <tbody>${shown.map((o) => {
+              const i = items.indexOf(o);
+              return `
               <tr data-i="${i}" class="${o.status}">
                 <td><span class="st ${o.status}">${STATUS[o.status]}</span></td>
+                <td class="area-c">${esc(SCOPE[scopeOf(o)])}</td>
                 <td class="area-c">${esc(o.area)}</td>
                 <td class="title-c">${esc(o.title)}</td>
                 <td class="find-c" title="${esc(o.finding)}">${esc(o.finding)}</td>
                 <td class="num">${o.saving_usd ? `~${money(o.saving_usd)}` : ""}</td>
                 <td>${spark(o)}</td>
-              </tr>`).join("")}</tbody>
+              </tr>`; }).join("")}</tbody>
           </table>
           <p class="sub" style="margin:12px 0 0">Click a row for the full recommendation.</p>
         </section>`;
@@ -289,6 +303,12 @@
         $("#odialog").showModal();
       }));
     }
+
+    document.querySelectorAll("#scope button").forEach((b) => b.addEventListener("click", () => {
+      selectedScope = b.dataset.scope;
+      document.querySelectorAll("#scope button").forEach((x) => x.classList.toggle("active", x === b));
+      render();
+    }));
 
     async function load() {
       $("#main").innerHTML = `<section class="panel"><div class="empty">Checking your setup…</div></section>`;

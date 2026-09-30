@@ -153,6 +153,30 @@ svg text { fill: var(--muted); font: 500 11px "JetBrains Mono", monospace; }
 .bubble q { display: block; font-size: 15px; line-height: 1.4; quotes: none; overflow-wrap: anywhere;
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .bubble .meta { display: flex; align-items: center; gap: 10px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+.compare-grid { display: grid; grid-template-columns: minmax(280px, 0.8fr) minmax(420px, 1.2fr); gap: 34px; margin-top: 18px; }
+.mix { display: flex; align-items: center; gap: 24px; }
+.donut { width: 170px; height: 170px; flex: none; border-radius: 50%; display: grid; place-items: center; }
+.donut > div { width: 104px; height: 104px; border-radius: 50%; display: grid; place-content: center; text-align: center; background: var(--surface); }
+.donut b { display: block; font-size: 30px; line-height: 1; }
+.donut span { color: var(--muted); font-size: 12px; }
+.mix-legends { display: grid; gap: 12px; min-width: 0; }
+.mix-legend { display: grid; grid-template-columns: 10px minmax(0, 1fr); gap: 9px; align-items: start; }
+.mix-legend > i { width: 10px; height: 10px; margin-top: 4px; border-radius: 3px; }
+.mix-legend b, .mix-legend small { display: block; }
+.mix-legend b { font-size: 14px; }
+.mix-legend small { color: var(--muted); font-size: 12px; line-height: 1.4; }
+.compare-metrics { display: grid; gap: 16px; }
+.compare-metric { display: grid; gap: 6px; }
+.compare-label { color: var(--muted); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; }
+.compare-row { display: grid; grid-template-columns: 110px minmax(100px, 1fr) 58px; gap: 10px; align-items: center; font-size: 12px; }
+.compare-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compare-row > b { text-align: right; font: 600 12px "JetBrains Mono", monospace; }
+.compare-track { height: 9px; overflow: hidden; border: 1px solid var(--line-dim); border-radius: 4px; }
+.compare-track i { display: block; height: 100%; border-radius: 3px; }
+@media (max-width: 900px) {
+  .compare-grid { grid-template-columns: 1fr; }
+  .mix { justify-content: center; }
+}
 .count { padding: 2px 9px; border: 1.5px solid var(--orange); border-radius: 6px; color: var(--orange-ink); font: 700 12px "JetBrains Mono", monospace; }
 
 /* ---------- outlined bars ---------- */

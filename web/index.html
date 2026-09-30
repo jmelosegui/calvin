@@ -44,9 +44,9 @@
     <section class="panel kpis" id="kpis"></section>
 
     <section class="panel" id="comparisonPanel">
-      <h2>Claude Code and Copilot CLI</h2>
-      <p class="sub">Shared behavior is compared with rates. Billing stays tool-specific: estimated USD for Claude Code and AI units for Copilot CLI.</p>
-      <div class="hbars" id="comparison"></div>
+      <h2>CLI mix and behavior</h2>
+      <p class="sub">The donut shows session share. Bars compare shared rates and scale to any number of coding tools. Billing remains tool-specific.</p>
+      <div id="comparison"></div>
     </section>
 
     <section class="panel span-8" id="costPanel">
@@ -160,19 +160,43 @@
         return;
       }
       const name = (id) => id === "claude-code" ? "Claude Code" : id === "copilot-cli" ? "Copilot CLI" : id;
-      $("#comparison").innerHTML = rows.map((r) => {
-        const promptsPerSession = r.sessions ? ((r.prompts + r.commands) / r.sessions).toFixed(1) : "–";
-        const toolsPerSession = r.sessions ? (r.tool_calls / r.sessions).toFixed(1) : "–";
-        const errorRate = r.tool_calls ? `${((r.tool_errors / r.tool_calls) * 100).toFixed(1)}%` : "–";
-        const billing = r.harness === "claude-code"
-          ? `${money(r.cost_usd ?? 0)} estimated API cost`
-          : r.ai_units == null ? "AI-unit usage unavailable" : `${r.ai_units.toFixed(2)} AI units`;
-        return `<div class="bubble">
-          <q>${esc(name(r.harness))}</q>
-          <div class="meta">${num(r.sessions)} sessions · ${promptsPerSession} prompts/session · ${toolsPerSession} tools/session · ${errorRate} tool errors</div>
-          <div class="meta">${num(r.files_touched)} files touched · ${tok(r.output_tokens)} output tokens · ${esc(billing)}</div>
-        </div>`;
+      const colors = ["#ff641f", "#6ca8ff", "#8bd450", "#d783ff", "#ffd166", "#4dd9c0"];
+      const totalSessions = rows.reduce((n, r) => n + r.sessions, 0);
+      let cursor = 0;
+      const stops = rows.map((r, i) => {
+        const start = cursor;
+        cursor += totalSessions ? (r.sessions / totalSessions) * 100 : 0;
+        return `${colors[i % colors.length]} ${start}% ${cursor}%`;
+      }).join(", ");
+      const metrics = [
+        ["Prompts / session", (r) => r.sessions ? (r.prompts + r.commands) / r.sessions : 0, (v) => v.toFixed(1)],
+        ["Tools / session", (r) => r.sessions ? r.tool_calls / r.sessions : 0, (v) => v.toFixed(1)],
+        ["Tool error rate", (r) => r.tool_calls ? (r.tool_errors / r.tool_calls) * 100 : 0, (v) => `${v.toFixed(1)}%`],
+      ];
+      const metricHtml = metrics.map(([label, value, format]) => {
+        const values = rows.map(value);
+        const max = Math.max(...values, 0.0001);
+        return `<div class="compare-metric"><div class="compare-label">${label}</div>${rows.map((r, i) => `
+          <div class="compare-row">
+            <span>${esc(name(r.harness))}</span>
+            <div class="compare-track"><i style="width:${(values[i] / max) * 100}%;background:${colors[i % colors.length]}"></i></div>
+            <b>${format(values[i])}</b>
+          </div>`).join("")}</div>`;
       }).join("");
+      const legend = rows.map((r, i) => {
+        const share = totalSessions ? Math.round((r.sessions / totalSessions) * 100) : 0;
+        const billing = r.harness === "claude-code"
+          ? `${money(r.cost_usd ?? 0)} estimated cost`
+          : r.ai_units == null ? "billing unavailable" : `${r.ai_units.toFixed(2)} AI units`;
+        return `<div class="mix-legend"><i style="background:${colors[i % colors.length]}"></i><span><b>${esc(name(r.harness))}</b><small>${num(r.sessions)} sessions · ${share}% · ${esc(billing)}</small></span></div>`;
+      }).join("");
+      $("#comparison").innerHTML = `<div class="compare-grid">
+        <div class="mix">
+          <div class="donut" style="background:conic-gradient(${stops})"><div><b>${num(totalSessions)}</b><span>sessions</span></div></div>
+          <div class="mix-legends">${legend}</div>
+        </div>
+        <div class="compare-metrics">${metricHtml}</div>
+      </div>`;
     }
 
     // ---------- cost chart ----------

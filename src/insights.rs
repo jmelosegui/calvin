@@ -447,6 +447,7 @@ pub struct SkillUsage {
     /// Where it came from, if recorded.
     pub detail: Option<String>,
     pub description: String,
+    pub providers: Vec<String>,
     /// Times the model chose to run it (Skill tool).
     pub model_runs: i64,
     /// Times you ran it yourself as a /command.
@@ -470,6 +471,7 @@ pub fn skill_usage(
                 kind: Some(s.kind.clone()),
                 detail: s.detail.clone(),
                 description: s.description.clone(),
+                providers: s.providers.clone(),
                 model_runs: 0,
                 command_runs: 0,
                 last_used: None,
@@ -491,6 +493,7 @@ pub fn skill_usage(
                 kind: None,
                 detail: Some("ran in a session but is no longer installed".into()),
                 description: String::new(),
+                providers: Vec::new(),
                 model_runs: 0,
                 command_runs: 0,
                 last_used: None,

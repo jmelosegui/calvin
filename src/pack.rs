@@ -327,6 +327,7 @@ mod tests {
             kind: "global".into(),
             detail: None,
             path: dir.join("SKILL.md").to_string_lossy().to_string(),
+            providers: vec!["claude-code".into()],
         }
     }
 
