@@ -533,6 +533,7 @@ pub struct Activity {
     pub ts: String,
     /// `prompt`, `command`, `tool`, `skill`, `request`, `rejected`, `denied`, `interrupted`.
     pub kind: String,
+    pub harness: String,
     pub project: Option<String>,
     pub label: String,
     /// Tokens for requests; not set for other kinds.
@@ -544,20 +545,21 @@ pub fn recent_activity(conn: &Connection, limit: i64) -> Result<Vec<Activity>> {
     let rows = conn
         .prepare(
             "SELECT * FROM (
-                 SELECT p.ts, p.kind, s.project, substr(p.text, 1, 120), NULL
+                 SELECT p.ts, p.kind, s.harness, s.project, substr(p.text, 1, 120), NULL
                  FROM prompts p LEFT JOIN sessions s ON s.id = p.session_id
                  WHERE p.is_sidechain = 0 ORDER BY p.ts DESC LIMIT ?1)
              UNION ALL SELECT * FROM (
-                 SELECT t.ts, CASE WHEN t.tool = 'Skill' THEN 'skill' ELSE 'tool' END, s.project,
+                 SELECT t.ts, CASE WHEN t.tool = 'Skill' THEN 'skill' ELSE 'tool' END,
+                        s.harness, s.project,
                         COALESCE(t.skill, t.tool), NULL
                  FROM tool_calls t LEFT JOIN sessions s ON s.id = t.session_id
                  ORDER BY t.ts DESC LIMIT ?1)
              UNION ALL SELECT * FROM (
-                 SELECT r.ts, 'request', s.project, r.model, r.output_tokens
+                 SELECT r.ts, 'request', s.harness, s.project, r.model, r.output_tokens
                  FROM requests r LEFT JOIN sessions s ON s.id = r.session_id
                  ORDER BY r.ts DESC LIMIT ?1)
              UNION ALL SELECT * FROM (
-                 SELECT f.ts, f.kind, s.project, COALESCE(f.tool, ''), NULL
+                 SELECT f.ts, f.kind, s.harness, s.project, COALESCE(f.tool, ''), NULL
                  FROM friction f LEFT JOIN sessions s ON s.id = f.session_id
                  ORDER BY f.ts DESC LIMIT ?1)
              ORDER BY 1 DESC LIMIT ?1",
@@ -566,9 +568,10 @@ pub fn recent_activity(conn: &Connection, limit: i64) -> Result<Vec<Activity>> {
             Ok(Activity {
                 ts: r.get(0)?,
                 kind: r.get(1)?,
-                project: r.get(2)?,
-                label: r.get(3)?,
-                tokens: r.get(4)?,
+                harness: r.get(2)?,
+                project: r.get(3)?,
+                label: r.get(4)?,
+                tokens: r.get(5)?,
             })
         })?
         .collect::<Result<_, _>>()?;

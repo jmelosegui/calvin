@@ -6,6 +6,7 @@ use calvin::db;
 use calvin::ingest::{Quiet, ingest_claude_code, ingest_copilot_cli};
 use calvin::insights::{self, CostBy, Since};
 use calvin::prices::PriceTable;
+use calvin::timeline;
 use rusqlite::Connection;
 
 const SESSION: &str = "00000000-0000-4000-8000-000000000001";
@@ -114,7 +115,7 @@ fn imports_copilot_cli_store_and_events() {
     let (_tmp, copilot) = copilot_fixture();
     let mut conn = db::open_in_memory().unwrap();
     let stats = ingest_copilot_cli(&mut conn, &copilot, &mut Quiet).unwrap();
-    assert_eq!((stats.files_read, stats.lines), (1, 3));
+    assert_eq!((stats.files_read, stats.lines), (1, 5));
     assert_eq!(
         count(
             &conn,
@@ -122,17 +123,49 @@ fn imports_copilot_cli_store_and_events() {
         ),
         1
     );
-    assert_eq!(count(&conn, "SELECT COUNT(*) FROM prompts"), 1);
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM prompts"), 2);
     assert_eq!(count(&conn, "SELECT COUNT(*) FROM tool_calls"), 1);
-    let (tokens, ai_units): (i64, f64) = conn
-        .query_row("SELECT output_tokens, ai_units FROM requests", [], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })
+    let (tokens, ai_units, turn_index): (i64, f64, i64) = conn
+        .query_row(
+            "SELECT output_tokens, ai_units, turn_index FROM requests",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
         .unwrap();
     assert_eq!(tokens, 20);
     assert!((ai_units - 1.5).abs() < f64::EPSILON);
+    assert_eq!(turn_index, 0);
+    let (duration_ms, detail): (i64, String) = conn
+        .query_row(
+            "SELECT duration_ms, result_detail FROM tool_calls",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert!((4_999..=5_001).contains(&duration_ms));
+    assert_eq!(detail, "tests passed");
+    let command: String = conn
+        .query_row("SELECT text FROM prompts WHERE kind = 'command'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(command, "/review");
+    let mode: String = conn
+        .query_row("SELECT mode FROM session_modes", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(mode, "plan");
     assert_eq!(count(&conn, "SELECT COUNT(*) FROM session_files"), 1);
     assert_eq!(count(&conn, "SELECT COUNT(*) FROM session_refs"), 1);
+
+    let session = timeline::session(&conn, "copilot-cli:11111111-1111-4111-8111-111111111111")
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.turns[0].requests, 1);
+    assert!((session.turns[0].ai_units - 1.5).abs() < f64::EPSILON);
+    assert_eq!(session.turns[0].output_tokens, 20);
+
+    let activity = insights::recent_activity(&conn, 20).unwrap();
+    assert!(activity.iter().all(|item| item.harness == "copilot-cli"));
 }
 
 #[test]

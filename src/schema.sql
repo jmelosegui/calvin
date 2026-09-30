@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS requests (
     cache_write_5m INTEGER,
     cache_write_1h INTEGER,
     effort         TEXT,
+    turn_index     INTEGER,
     cost_usd       REAL,
     ai_units       REAL,
     duration_ms    INTEGER,
@@ -74,8 +75,11 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     ts         TEXT NOT NULL,
     tool       TEXT NOT NULL,
     skill      TEXT,
+    turn_index INTEGER,
     input_json TEXT,
-    outcome    TEXT
+    outcome    TEXT,
+    duration_ms INTEGER,
+    result_detail TEXT
 );
 CREATE INDEX IF NOT EXISTS tool_calls_ts ON tool_calls (ts);
 
@@ -91,6 +95,14 @@ CREATE TABLE IF NOT EXISTS friction (
     detail     TEXT
 );
 CREATE INDEX IF NOT EXISTS friction_ts ON friction (ts);
+
+CREATE TABLE IF NOT EXISTS session_modes (
+    id         TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    ts         TEXT NOT NULL,
+    mode       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS session_modes_ts ON session_modes (ts);
 
 -- Per-session lookups for the session browser.
 CREATE INDEX IF NOT EXISTS prompts_session ON prompts (session_id);

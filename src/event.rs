@@ -20,6 +20,12 @@ pub enum Event {
         session_id: String,
         ts: String,
     },
+    ModeChanged {
+        id: String,
+        session_id: String,
+        ts: String,
+        mode: String,
+    },
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -75,6 +81,7 @@ pub struct Request {
     pub skill: Option<String>,
     /// Reasoning effort the request ran at (`low` … `max`), if the harness records it.
     pub effort: Option<String>,
+    pub turn_index: Option<i64>,
     pub is_sidechain: bool,
 }
 
@@ -87,6 +94,7 @@ pub struct ToolCall {
     pub tool: String,
     /// For skill invocations, the skill's name.
     pub skill: Option<String>,
+    pub turn_index: Option<i64>,
     pub input_json: String,
 }
 

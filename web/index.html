@@ -424,6 +424,7 @@
     let paused = false;
     let seen = new Set();
     const LIVE_LABEL = { prompt: "prompt", command: "command", tool: "tool", skill: "skill", request: "model", rejected: "rejected", denied: "denied", interrupted: "interrupted" };
+    const LIVE_HARNESS = { "claude-code": "CC", "copilot-cli": "CP" };
     async function tick() {
       if (paused) return;
       try {
@@ -431,13 +432,14 @@
         const first = seen.size === 0;
         $("#feed").innerHTML = items.length
           ? items.map((a) => {
-              const id = a.ts + a.kind + a.label;
+              const id = a.ts + a.kind + a.harness + a.label;
               const isNew = !first && !seen.has(id);
               seen.add(id);
               const t = new Date(a.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
               const right = a.kind === "request" && a.tokens != null ? `${tok(a.tokens)} out` : "";
               const where = a.project ? `in ${esc(a.project)}` : "";
-              return `<li class="${isNew ? "new" : ""}" title="${where}"><span class="t">${t}</span><span class="l"><span class="k">${LIVE_LABEL[a.kind] ?? esc(a.kind)}</span> ${esc(a.label)}</span><span class="ms">${right}</span></li>`;
+              const provider = LIVE_HARNESS[a.harness] ?? a.harness;
+              return `<li class="${isNew ? "new" : ""}" title="${where}"><span class="t">${t}</span><span class="l"><span class="k">${esc(provider)}</span> <span class="k">${LIVE_LABEL[a.kind] ?? esc(a.kind)}</span> ${esc(a.label)}</span><span class="ms">${right}</span></li>`;
             }).join("")
           : `<li><span class="empty">No activity yet.</span></li>`;
         const sync = status.last_sync;
