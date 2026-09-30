@@ -5,7 +5,7 @@
 //! Only names and counts are collected, never setting values that could be secrets.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use rusqlite::Connection;
@@ -266,6 +266,7 @@ pub fn copilot_markdown(conn: &Connection, since: &Since, copilot_dir: &Path) ->
         )
         .ok();
     let mut tools = Vec::new();
+    let mut mcp_used = BTreeMap::<String, i64>::new();
     let mut stmt = conn.prepare(
         "SELECT t.tool, COUNT(*) FROM tool_calls t JOIN sessions s ON s.id = t.session_id
          WHERE s.harness = 'copilot-cli' AND t.ts >= ?1 GROUP BY t.tool ORDER BY 2 DESC, 1",
@@ -273,7 +274,37 @@ pub fn copilot_markdown(conn: &Connection, since: &Since, copilot_dir: &Path) ->
     for row in stmt.query_map([&since.0], |r| {
         Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
     })? {
-        tools.push(row?);
+        let (tool, count) = row?;
+        if let Some(server) = tool
+            .strip_prefix("mcp__")
+            .and_then(|name| name.split("__").next())
+        {
+            *mcp_used.entry(server.to_string()).or_default() += count;
+        } else {
+            tools.push((tool, count));
+        }
+    }
+    let mut models = Vec::new();
+    let mut stmt = conn.prepare(
+        "SELECT r.model, COUNT(*) FROM requests r JOIN sessions s ON s.id = r.session_id
+         WHERE s.harness = 'copilot-cli' AND r.ts >= ?1 AND r.model IS NOT NULL
+         GROUP BY r.model ORDER BY 2 DESC, 1",
+    )?;
+    for row in stmt.query_map([&since.0], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+    })? {
+        models.push(row?);
+    }
+    let mut modes = Vec::new();
+    let mut stmt = conn.prepare(
+        "SELECT m.mode, COUNT(*) FROM session_modes m JOIN sessions s ON s.id = m.session_id
+         WHERE s.harness = 'copilot-cli' AND m.ts >= ?1
+         GROUP BY m.mode ORDER BY 2 DESC, 1",
+    )?;
+    for row in stmt.query_map([&since.0], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+    })? {
+        modes.push(row?);
     }
     let mut commands = BTreeMap::<String, i64>::new();
     let mut stmt = conn.prepare(
@@ -286,15 +317,54 @@ pub fn copilot_markdown(conn: &Connection, since: &Since, copilot_dir: &Path) ->
         *commands.entry(command).or_default() += 1;
     }
     let settings = read_json(&copilot_dir.join("settings.json"));
-    let setting_keys = settings
+    let mut setting_keys = settings
         .as_object()
         .map(|o| o.keys().cloned().collect::<Vec<_>>())
         .unwrap_or_default();
+    setting_keys.sort();
+    let mcp = read_json(&copilot_dir.join("mcp-config.json"));
+    let mut mcp_servers = mcp
+        .get("mcpServers")
+        .and_then(Value::as_object)
+        .map(|o| o.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    mcp_servers.sort();
+    let permission_locations = read_json(&copilot_dir.join("permissions-config.json"))
+        .get("locations")
+        .and_then(Value::as_object)
+        .map(|o| o.len())
+        .unwrap_or(0);
+    let mut plugins = entry_names(&copilot_dir.join("installed-plugins"));
+    plugins.sort();
+    let mut agents = entry_names(&copilot_dir.join("agents"));
+    let mut skills = entry_names(&copilot_dir.join("skills"));
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT cwd FROM sessions
+         WHERE harness = 'copilot-cli' AND cwd IS NOT NULL AND started_at >= ?1",
+    )?;
+    for row in stmt.query_map([&since.0], |r| r.get::<_, String>(0))? {
+        let root = inventory_repo_root(&PathBuf::from(row?));
+        agents.extend(entry_names(&root.join(".github").join("agents")));
+        skills.extend(entry_names(&root.join(".github").join("skills")));
+    }
+    agents.sort();
+    agents.dedup();
+    skills.sort();
+    skills.dedup();
     let mut out = String::from("## How you use Copilot CLI today\n");
     if let Some(version) = version {
         out.push_str(&format!("- Copilot CLI version: {version}\n"));
     }
     out.push_str(&format!("- Tools used (calls): {}\n", list(&tools)));
+    out.push_str(&format!("- Models used (requests): {}\n", list(&models)));
+    out.push_str(&format!(
+        "- Modes entered: {}\n",
+        if modes.is_empty() {
+            "interactive only or unavailable".into()
+        } else {
+            list(&modes)
+        }
+    ));
     out.push_str(&format!(
         "- Slash commands typed: {}\n",
         list(&commands.into_iter().collect::<Vec<_>>())
@@ -307,8 +377,69 @@ pub fn copilot_markdown(conn: &Connection, since: &Since, copilot_dir: &Path) ->
             setting_keys.join(", ")
         }
     ));
+    out.push_str(&format!(
+        "- MCP servers configured (names only): {}\n",
+        if mcp_servers.is_empty() {
+            "none".into()
+        } else {
+            mcp_servers.join(", ")
+        }
+    ));
+    out.push_str(&format!(
+        "- MCP servers observed in tool calls: {}\n",
+        list(&mcp_used.into_iter().collect::<Vec<_>>())
+    ));
+    out.push_str(&format!(
+        "- Permission locations configured: {permission_locations}\n"
+    ));
+    out.push_str(&format!(
+        "- Installed plugins: {}\n",
+        if plugins.is_empty() {
+            "none".into()
+        } else {
+            plugins.join(", ")
+        }
+    ));
+    out.push_str(&format!(
+        "- Custom agents discovered: {} · skills discovered: {}\n",
+        if agents.is_empty() {
+            "none".into()
+        } else {
+            agents.join(", ")
+        },
+        if skills.is_empty() {
+            "none".into()
+        } else {
+            skills.join(", ")
+        }
+    ));
     out.push_str(
         "- Official documentation: https://docs.github.com/copilot/how-tos/use-copilot-agents/use-copilot-cli\n",
     );
     Ok(out)
+}
+
+fn entry_names(dir: &Path) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| {
+                    let path = entry.path();
+                    path.file_stem()
+                        .or_else(|| path.file_name())
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string()
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn inventory_repo_root(path: &Path) -> PathBuf {
+    path.ancestors()
+        .find(|candidate| candidate.join(".git").exists())
+        .unwrap_or(path)
+        .to_path_buf()
 }

@@ -32,3 +32,19 @@ Either source may be absent; ingestion continues with the data that is available
 
 The local format is not a public compatibility contract. Parsing is intentionally tolerant,
 and unknown event types or fields are ignored.
+
+## Tailored recommendations
+
+Copilot recommendations use Copilot-only evidence and never compare AI units with Claude
+Code's estimated USD cost. Calvin currently checks for:
+
+- substantial multi-file or tool-heavy sessions that did not use `/plan`;
+- long or high-context sessions that did not use `/compact`;
+- sessions changing five or more files without `/review`, `/security-review` or
+  `/rubber-duck`;
+- bounded prompts repeated across multiple sessions that may suit `/autopilot` with an
+  explicit AI-credit limit.
+
+The advisor inventory also reports Copilot models, modes, slash commands, settings keys,
+configured and observed MCP server names, permission-location counts, plugins, agents and
+skills. Configuration values, tokens and MCP credentials are never included.

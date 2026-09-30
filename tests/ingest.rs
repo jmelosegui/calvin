@@ -169,6 +169,77 @@ fn imports_copilot_cli_store_and_events() {
 }
 
 #[test]
+fn copilot_inventory_and_recommendations_use_provider_evidence() {
+    let (tmp, copilot) = copilot_fixture();
+    std::fs::write(
+        copilot.join("mcp-config.json"),
+        r#"{"mcpServers":{"github":{"command":"secret-value"}}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        copilot.join("permissions-config.json"),
+        r#"{"locations":{"C:\\work\\demo":{"allow":["secret-value"]}}}"#,
+    )
+    .unwrap();
+    let mut conn = db::open_in_memory().unwrap();
+    ingest_copilot_cli(&mut conn, &copilot, &mut Quiet).unwrap();
+    conn.execute_batch(
+        "INSERT INTO sessions
+             (id, harness, project, cwd, title, started_at, ended_at)
+         VALUES
+             ('copilot-cli:second', 'copilot-cli', 'demo', 'C:\\work\\demo',
+              'Second test run', '2026-09-15T11:00:00Z', '2026-09-15T11:05:00Z');
+         INSERT INTO prompts (id, session_id, ts, kind, text, is_sidechain) VALUES
+             ('repeat-1', 'copilot-cli:11111111-1111-4111-8111-111111111111',
+              '2026-09-15T10:03:00Z', 'prompt', 'run the tests', 0),
+             ('repeat-2', 'copilot-cli:11111111-1111-4111-8111-111111111111',
+              '2026-09-15T10:04:00Z', 'prompt', 'run the tests', 0),
+             ('repeat-3', 'copilot-cli:second',
+              '2026-09-15T11:01:00Z', 'prompt', 'run the tests', 0);
+         INSERT INTO session_files (session_id, file_path, tool_name, turn_index) VALUES
+             ('copilot-cli:second', 'src/a.rs', 'apply_patch', 0),
+             ('copilot-cli:second', 'src/b.rs', 'apply_patch', 0),
+             ('copilot-cli:second', 'src/c.rs', 'apply_patch', 0),
+             ('copilot-cli:second', 'src/d.rs', 'apply_patch', 0),
+             ('copilot-cli:second', 'src/e.rs', 'apply_patch', 0);
+         INSERT INTO requests
+             (request_id, session_id, ts, model, input_tokens, output_tokens, is_sidechain)
+         VALUES
+             ('high-context', 'copilot-cli:second', '2026-09-15T11:02:00Z',
+              'gpt-test', 100000, 10, 0);",
+    )
+    .unwrap();
+
+    let inventory =
+        calvin::inventory::copilot_markdown(&conn, &Since::all(), &copilot).unwrap();
+    assert!(inventory.contains("Modes entered: plan (1)"));
+    assert!(inventory.contains("MCP servers configured (names only): github"));
+    assert!(inventory.contains("Permission locations configured: 1"));
+    assert!(!inventory.contains("secret-value"));
+
+    let prices = PriceTable::bundled();
+    let ctx = calvin::opportunities::Context {
+        claude_dir: tmp.path(),
+        prices: &prices,
+        skills: &[],
+    };
+    let found = calvin::opportunities::run(&conn, &Since::all(), &ctx).unwrap();
+    let ids: Vec<_> = found.iter().map(|opportunity| opportunity.id).collect();
+    assert!(ids.contains(&"copilot-plan-mode"));
+    assert!(ids.contains(&"copilot-compact"));
+    assert!(ids.contains(&"copilot-review"));
+    assert!(ids.contains(&"copilot-autopilot"));
+    assert_eq!(
+        found
+            .iter()
+            .find(|opportunity| opportunity.id == "copilot-plan-mode")
+            .unwrap()
+            .status,
+        calvin::opportunities::Status::Consider
+    );
+}
+
+#[test]
 fn imports_the_fixture() {
     let (_tmp, claude) = fixture();
     let mut conn = db::open_in_memory().unwrap();

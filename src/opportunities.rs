@@ -89,6 +89,10 @@ pub fn run(conn: &Connection, since: &Since, ctx: &Context) -> Result<Vec<Opport
     let mut out = vec![
         shared_agents_md(conn, since)?,
         copilot_project_instructions(conn, since)?,
+        copilot_plan_mode(conn, since)?,
+        copilot_compact(conn, since)?,
+        copilot_review(conn, since)?,
+        copilot_autopilot(conn, since)?,
     ];
     conn.execute_batch(
         "CREATE TEMP VIEW sessions AS SELECT * FROM main.sessions WHERE harness = 'claude-code';
@@ -391,6 +395,286 @@ fn copilot_project_instructions(conn: &Connection, since: &Since) -> Result<Oppo
             roots.insert(repo_root(&path), ());
         }
     }
+    copilot_project_instructions_from_roots(roots)
+}
+
+fn copilot_plan_mode(conn: &Connection, since: &Since) -> Result<Opportunity> {
+    let mut stmt = conn.prepare(
+                "SELECT s.id, COALESCE(s.title, ''), s.project,
+                        (SELECT COUNT(*) FROM prompts p WHERE p.session_id = s.id AND p.kind = 'prompt'),
+                        (SELECT COUNT(*) FROM tool_calls t WHERE t.session_id = s.id),
+                        (SELECT COUNT(*) FROM session_files f WHERE f.session_id = s.id),
+                        EXISTS (SELECT 1 FROM session_modes m
+                                WHERE m.session_id = s.id AND m.mode = 'plan')
+                          OR EXISTS (SELECT 1 FROM prompts p
+                                     WHERE p.session_id = s.id AND p.kind = 'command'
+                                       AND p.text LIKE '/plan%')
+                 FROM sessions s
+                 WHERE s.harness = 'copilot-cli' AND s.started_at >= ?1",
+            )?;
+    let mut large = 0usize;
+    let mut missed = Vec::new();
+    for row in stmt.query_map([&since.0], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, Option<String>>(2)?,
+            r.get::<_, i64>(3)?,
+            r.get::<_, i64>(4)?,
+            r.get::<_, i64>(5)?,
+            r.get::<_, bool>(6)?,
+        ))
+    })? {
+        let (id, title, project, prompts, tools, files, planned) = row?;
+        if prompts >= 8 || tools >= 15 || files >= 4 {
+            large += 1;
+            if !planned {
+                missed.push((id, title, project, prompts, tools, files));
+            }
+        }
+    }
+    if large == 0 {
+        return Ok(skip());
+    }
+    Ok(Opportunity {
+                id: "copilot-plan-mode",
+                area: "Copilot CLI",
+                status: if missed.is_empty() {
+                    Status::Good
+                } else {
+                    Status::Consider
+                },
+                title: "Plan substantial Copilot tasks before editing".into(),
+                finding: format!(
+                    "{} of {large} substantial Copilot session{} did not use plan mode.",
+                    missed.len(),
+                    if large == 1 { "" } else { "s" }
+                ),
+                why: "Plan mode lets you inspect and adjust Copilot's approach before it changes files, which is most useful when a task spans many tools, files or turns.".into(),
+                fix: "Start substantial tasks with /plan, review the proposed approach, then switch to implementation.".into(),
+                snippet: Some("/plan".into()),
+                saving_usd: None,
+                evidence: missed
+                    .iter()
+                    .take(10)
+                    .map(|(id, title, project, prompts, tools, files)| Evidence {
+                        label: if title.is_empty() {
+                            "(untitled session)".into()
+                        } else {
+                            title.clone()
+                        },
+                        detail: Some(format!(
+                            "{} · {prompts} prompts · {tools} tool calls · {files} files",
+                            project.clone().unwrap_or_default()
+                        )),
+                        link: Some(format!("/sessions#{id}")),
+                    })
+                    .collect(),
+                metric: Metric::lower(missed.len() as f64, "substantial Copilot sessions without plan mode"),
+            })
+}
+
+fn copilot_compact(conn: &Connection, since: &Since) -> Result<Opportunity> {
+    let mut stmt = conn.prepare(
+                "SELECT s.id, COALESCE(s.title, ''), s.project,
+                        (SELECT COUNT(*) FROM prompts p WHERE p.session_id = s.id AND p.kind = 'prompt'),
+                        (SELECT COALESCE(MAX(input_tokens), 0) FROM requests r WHERE r.session_id = s.id),
+                        EXISTS (SELECT 1 FROM prompts p WHERE p.session_id = s.id
+                                AND p.kind = 'command' AND p.text LIKE '/compact%')
+                 FROM sessions s
+                 WHERE s.harness = 'copilot-cli' AND s.started_at >= ?1",
+            )?;
+    let mut long = 0usize;
+    let mut missed = Vec::new();
+    for row in stmt.query_map([&since.0], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, Option<String>>(2)?,
+            r.get::<_, i64>(3)?,
+            r.get::<_, i64>(4)?,
+            r.get::<_, bool>(5)?,
+        ))
+    })? {
+        let (id, title, project, prompts, max_input, compacted) = row?;
+        if prompts >= 20 || max_input >= 100_000 {
+            long += 1;
+            if !compacted {
+                missed.push((id, title, project, prompts, max_input));
+            }
+        }
+    }
+    if long == 0 {
+        return Ok(skip());
+    }
+    Ok(Opportunity {
+                id: "copilot-compact",
+                area: "Copilot CLI",
+                status: if missed.is_empty() {
+                    Status::Good
+                } else {
+                    Status::Consider
+                },
+                title: "Compact long Copilot sessions before context gets crowded".into(),
+                finding: format!(
+                    "{} of {long} long or high-context Copilot session{} did not use /compact.",
+                    missed.len(),
+                    if long == 1 { "" } else { "s" }
+                ),
+                why: "/compact summarizes conversation history so useful context remains while old turn-by-turn detail stops consuming the context window.".into(),
+                fix: "Run /context when a session grows; use /compact with optional focus instructions before continuing a long task.".into(),
+                snippet: Some("/compact Keep the current implementation decisions and remaining test failures.".into()),
+                saving_usd: None,
+                evidence: missed
+                    .iter()
+                    .take(10)
+                    .map(|(id, title, project, prompts, max_input)| Evidence {
+                        label: if title.is_empty() {
+                            "(untitled session)".into()
+                        } else {
+                            title.clone()
+                        },
+                        detail: Some(format!(
+                            "{} · {prompts} prompts · peak recorded input {} tokens",
+                            project.clone().unwrap_or_default(),
+                            max_input
+                        )),
+                        link: Some(format!("/sessions#{id}")),
+                    })
+                    .collect(),
+                metric: Metric::lower(missed.len() as f64, "long Copilot sessions without compact"),
+            })
+}
+
+fn copilot_review(conn: &Connection, since: &Since) -> Result<Opportunity> {
+    let mut stmt = conn.prepare(
+        "SELECT s.id, COALESCE(s.title, ''), s.project, COUNT(DISTINCT f.file_path),
+                        EXISTS (SELECT 1 FROM prompts p WHERE p.session_id = s.id
+                                AND p.kind = 'command'
+                                AND (p.text LIKE '/review%' OR p.text LIKE '/security-review%'
+                                     OR p.text LIKE '/rubber-duck%'))
+                 FROM sessions s JOIN session_files f ON f.session_id = s.id
+                 WHERE s.harness = 'copilot-cli' AND s.started_at >= ?1
+                 GROUP BY s.id, s.title, s.project",
+    )?;
+    let mut substantial = 0usize;
+    let mut missed = Vec::new();
+    for row in stmt.query_map([&since.0], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, Option<String>>(2)?,
+            r.get::<_, i64>(3)?,
+            r.get::<_, bool>(4)?,
+        ))
+    })? {
+        let (id, title, project, files, reviewed) = row?;
+        if files >= 5 {
+            substantial += 1;
+            if !reviewed {
+                missed.push((id, title, project, files));
+            }
+        }
+    }
+    if substantial == 0 {
+        return Ok(skip());
+    }
+    Ok(Opportunity {
+                id: "copilot-review",
+                area: "Copilot CLI",
+                status: if missed.is_empty() {
+                    Status::Good
+                } else {
+                    Status::Consider
+                },
+                title: "Add an independent review after broad Copilot changes".into(),
+                finding: format!(
+                    "{} of {substantial} Copilot session{} changing 5 or more files did not run a review agent.",
+                    missed.len(),
+                    if substantial == 1 { "" } else { "s" }
+                ),
+                why: "A fresh review agent examines the resulting diff rather than continuing the implementation's assumptions, making it useful after broad changes.".into(),
+                fix: "Run /review after substantial changes. Use /security-review for staged or unstaged security-sensitive changes, or /rubber-duck for an independent critique of the approach.".into(),
+                snippet: Some("/review".into()),
+                saving_usd: None,
+                evidence: missed
+                    .iter()
+                    .take(10)
+                    .map(|(id, title, project, files)| Evidence {
+                        label: if title.is_empty() {
+                            "(untitled session)".into()
+                        } else {
+                            title.clone()
+                        },
+                        detail: Some(format!(
+                            "{} · {files} changed files",
+                            project.clone().unwrap_or_default()
+                        )),
+                        link: Some(format!("/sessions#{id}")),
+                    })
+                    .collect(),
+                metric: Metric::lower(missed.len() as f64, "broad Copilot sessions without review"),
+            })
+}
+
+fn copilot_autopilot(conn: &Connection, since: &Since) -> Result<Opportunity> {
+    let mut stmt = conn.prepare(
+        "SELECT p.text, p.session_id FROM prompts p
+                 JOIN sessions s ON s.id = p.session_id
+                 WHERE s.harness = 'copilot-cli' AND p.kind = 'prompt'
+                   AND p.is_sidechain = 0 AND p.ts >= ?1",
+    )?;
+    let mut repeated: BTreeMap<String, (String, i64, HashSet<String>)> = BTreeMap::new();
+    for row in stmt.query_map([&since.0], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })? {
+        let (text, session) = row?;
+        let key = insights::normalise_prompt(&text);
+        if key.split_whitespace().count() < 3 {
+            continue;
+        }
+        let entry = repeated
+            .entry(key)
+            .or_insert_with(|| (text.clone(), 0, HashSet::new()));
+        entry.1 += 1;
+        entry.2.insert(session);
+    }
+    let mut rows: Vec<_> = repeated
+        .into_values()
+        .filter(|(_, count, sessions)| *count >= 4 && sessions.len() >= 2)
+        .collect();
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    if rows.is_empty() {
+        return Ok(skip());
+    }
+    Ok(Opportunity {
+                id: "copilot-autopilot",
+                area: "Copilot CLI",
+                status: Status::Consider,
+                title: "Use bounded autopilot for repeated end-to-end tasks".into(),
+                finding: format!(
+                    "{} repeated Copilot task{} appeared 4 or more times across multiple sessions.",
+                    rows.len(),
+                    if rows.len() == 1 { "" } else { "s" }
+                ),
+                why: "Autopilot can plan and execute a well-understood objective with fewer handoffs. It is best for bounded, repeatable work rather than ambiguous changes.".into(),
+                fix: "For a repeated task with clear success criteria, start /autopilot with an explicit objective and an AI-credit limit. Keep destructive operations and final review outside the objective.".into(),
+                snippet: Some("/autopilot <objective> --max-ai-credits <limit>".into()),
+                saving_usd: None,
+                evidence: rows
+                    .iter()
+                    .take(10)
+                    .map(|(example, count, sessions)| Evidence {
+                        label: example.chars().take(140).collect(),
+                        detail: Some(format!("{count}× across {} sessions", sessions.len())),
+                        link: None,
+                    })
+                    .collect(),
+                metric: Metric::lower(rows.len() as f64, "repeatable Copilot tasks not automated"),
+            })
+}
+
+fn copilot_project_instructions_from_roots(roots: BTreeMap<PathBuf, ()>) -> Result<Opportunity> {
     if roots.is_empty() {
         return Ok(skip());
     }
