@@ -473,10 +473,18 @@ fn file_uri_path(value: &str) -> Option<String> {
         }
     }
     let mut path = String::from_utf8(decoded).ok()?;
-    if cfg!(windows) && path.starts_with('/') && path.as_bytes().get(2) == Some(&b':') {
+    // `file:///C:/…` describes a Windows path wherever it is parsed, so the drive letter is
+    // detected from the URI itself. Keying this off the host would rewrite the separators of
+    // imported data differently on each platform.
+    let bytes = path.as_bytes();
+    let windows_drive = bytes.first() == Some(&b'/')
+        && bytes.get(1).is_some_and(u8::is_ascii_alphabetic)
+        && bytes.get(2) == Some(&b':');
+    if windows_drive {
         path.remove(0);
+        return Some(path.replace('/', "\\"));
     }
-    Some(path.replace('/', std::path::MAIN_SEPARATOR_STR))
+    Some(path)
 }
 
 fn sqlite_bytes(value: SqlValue) -> Option<Vec<u8>> {
@@ -1002,4 +1010,32 @@ pub fn project_name(cwd: &str) -> String {
         .next()
         .unwrap_or(cwd)
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Cursor records workspace URIs from the machine that produced them, so the same URI must
+    /// decode to the same path on every platform calvin runs on.
+    #[test]
+    fn file_uris_decode_independently_of_the_host() {
+        assert_eq!(
+            file_uri_path("file:///C%3A/work/calvin").as_deref(),
+            Some(r"C:\work\calvin")
+        );
+        assert_eq!(
+            file_uri_path("file:///C:/work/calvin").as_deref(),
+            Some(r"C:\work\calvin")
+        );
+        assert_eq!(
+            file_uri_path("file:///home/juan/calvin").as_deref(),
+            Some("/home/juan/calvin")
+        );
+        assert_eq!(
+            file_uri_path("file:///work/my%20project").as_deref(),
+            Some("/work/my project")
+        );
+        assert_eq!(file_uri_path("workspace-a"), None);
+    }
 }
