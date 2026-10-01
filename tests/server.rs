@@ -125,6 +125,83 @@ async fn summary_is_json_from_the_database() {
 }
 
 #[tokio::test]
+async fn daily_billing_keeps_copilot_ai_units_separate() {
+    let (tmp, app) = app();
+    let conn = db::open(&tmp.path().join("calvin.db")).unwrap();
+    conn.execute(
+        "INSERT INTO sessions (id, harness, started_at)
+         VALUES ('copilot-cli:billing', 'copilot-cli', '2026-09-30T12:00:00Z')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO requests
+         (request_id, session_id, ts, model, input_tokens, output_tokens, cache_read,
+          cache_write_5m, cache_write_1h, ai_units)
+         VALUES ('copilot-billing', 'copilot-cli:billing', '2026-09-30T12:01:00Z', 'gpt-test',
+                 0, 0, 0, 0, 0, 2.5)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    let res = app
+        .clone()
+        .oneshot(get(
+            "/api/cost?by=day&since=all&harness=copilot-cli",
+            "127.0.0.1:1982",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let rows: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(rows[0]["cost_usd"], 0.0);
+    assert_eq!(rows[0]["ai_units"], 2.5);
+
+    let res = app
+        .oneshot(get(
+            "/api/models?since=all&harness=copilot-cli",
+            "127.0.0.1:1982",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let models: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(models[0]["model"], "gpt-test");
+    assert_eq!(models[0]["ai_units"], 2.5);
+}
+
+#[tokio::test]
+async fn advisor_preview_requires_docs_for_every_harness() {
+    let (tmp, app) = app();
+    let conn = db::open(&tmp.path().join("calvin.db")).unwrap();
+    conn.execute(
+        "INSERT INTO sessions (id, harness, started_at)
+         VALUES ('copilot-cli:test', 'copilot-cli', '2026-09-30T12:00:00Z')",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    let res = app
+        .oneshot(get("/api/advisor/preview?since=all", "127.0.0.1:1982"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let prompt = v["prompt"].as_str().unwrap();
+    assert!(prompt.contains("## Required official documentation sources"));
+    assert!(prompt.contains("https://code.claude.com/docs/llms.txt"));
+    assert!(prompt.contains("https://docs.github.com/en/copilot/how-tos/copilot-cli"));
+    assert!(prompt.contains(
+        "https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference"
+    ));
+}
+
+#[tokio::test]
 async fn pack_only_accepts_installed_skill_names() {
     let (_tmp, app) = app();
     for path in [
@@ -189,6 +266,7 @@ async fn sessions_list_and_timeline() {
     assert_eq!(list.as_array().unwrap().len(), 1);
     assert_eq!(list[0]["title"], "Fix failing tests");
     assert_eq!(list[0]["friction"], 3);
+    assert_eq!(list[0]["cwd"], r"C:\work\demo");
 
     let id = list[0]["id"].as_str().unwrap();
     let res = app

@@ -13,6 +13,10 @@
   --faint: #6b655e;
   --orange: #ff6a1a;
   --orange-ink: #ff7f36;
+  --claude: #ff641f;
+  --claude-ink: #ff8a4d;
+  --copilot: #6ca8ff;
+  --copilot-ink: #8fbdff;
   --dot: rgba(255, 255, 255, 0.05);
   --btn: #221f1c;
 }
@@ -27,6 +31,10 @@
   --faint: #a39b91;
   --orange: #e85a0c;
   --orange-ink: #b84604;
+  --claude: #e85a0c;
+  --claude-ink: #b84604;
+  --copilot: #397fdc;
+  --copilot-ink: #155ebd;
   --dot: rgba(0, 0, 0, 0.07);
   --btn: #ece6de;
 }
@@ -72,6 +80,25 @@ body {
 h1 { margin: 0; font-size: 34px; font-weight: 700; letter-spacing: -0.02em; }
 h1 .px { font-family: "Silkscreen", monospace; font-weight: 400; font-size: 36px; color: var(--orange); }
 .actions { margin-left: auto; display: flex; flex-wrap: wrap; gap: 10px; }
+.cli-picker { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; white-space: nowrap; }
+.cli-picker select {
+  padding: 8px 10px; border: 1.5px solid var(--line-dim); border-radius: 8px;
+  background: var(--bg); color: var(--text); font: 500 13px "Outfit", sans-serif;
+}
+.cli-picker select:focus { outline: none; border-color: var(--orange); }
+.cli-picker select option, .prov select option { background: var(--surface); color: var(--text); }
+.cli-picker select option:hover, .cli-picker select option:focus, .cli-picker select option:checked,
+.prov select option:hover, .prov select option:focus, .prov select option:checked {
+  background: var(--btn) linear-gradient(0deg, var(--btn), var(--btn));
+  color: var(--text);
+  box-shadow: inset 0 0 0 100vmax var(--btn);
+}
+.provider-badge {
+  display: inline-block; padding: 1px 6px; border: 1px solid var(--line-dim); border-radius: 5px;
+  color: var(--muted); font-size: 10px; font-weight: 600; vertical-align: 1px; white-space: nowrap;
+}
+.provider-badge.claude-code { border-color: var(--claude); color: var(--claude-ink); }
+.provider-badge.copilot-cli { border-color: var(--copilot); color: var(--copilot-ink); }
 .btn {
   display: inline-flex; align-items: center; gap: 10px; padding: 10px 16px; border: 0; border-radius: 8px;
   background: var(--btn); color: var(--text); font: 600 14px "Outfit", sans-serif; cursor: pointer;
@@ -90,6 +117,11 @@ main { display: grid; grid-template-columns: repeat(12, 1fr); gap: 18px; max-wid
 @media (max-width: 1050px) { .span-8, .span-7, .span-6, .span-5, .span-4 { grid-column: span 12; } }
 .panel h2 { margin: 0 0 4px; font-size: 18px; font-weight: 600; }
 .panel .sub { margin: 0 0 16px; font-size: 13px; color: var(--muted); }
+.billing-legend { display: flex; flex-wrap: wrap; gap: 10px 18px; margin: -6px 0 12px; color: var(--muted); font-size: 12px; }
+.billing-legend span { display: inline-flex; align-items: center; gap: 7px; }
+.billing-legend i { width: 9px; height: 9px; border-radius: 3px; }
+.billing-legend .claude-code i { background: var(--claude); }
+.billing-legend .copilot-cli i { background: var(--copilot); }
 .empty { padding: 24px 0; color: var(--muted); font-size: 14px; }
 .eyebrow { font-size: 11px; font-weight: 500; letter-spacing: 0.24em; text-transform: uppercase; color: var(--muted); }
 
@@ -107,6 +139,8 @@ svg { display: block; width: 100%; height: auto; overflow: visible; }
 svg text { fill: var(--muted); font: 500 11px "JetBrains Mono", monospace; }
 .grid-line { stroke: var(--line-dim); stroke-width: 1; }
 .bar { fill: var(--orange); pointer-events: none; }
+.bar.claude-code { fill: var(--claude); }
+.bar.copilot-cli { fill: var(--copilot); }
 .hit { fill: transparent; cursor: crosshair; }
 .frame { fill: none; stroke: var(--line); stroke-width: 1.5; }
 .book { fill: none; stroke: var(--line); stroke-width: 1.3; cursor: pointer; pointer-events: all; }

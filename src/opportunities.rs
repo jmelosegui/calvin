@@ -4,7 +4,7 @@
 //! Every check reads only local data: calvin's database, your Claude Code settings,
 //! `~/.claude.json`, and files in the projects you've worked in. Nothing is changed.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -81,6 +81,7 @@ impl Metric {
 /// Everything the checks read besides the database.
 pub struct Context<'a> {
     pub claude_dir: &'a Path,
+    pub copilot_dir: &'a Path,
     pub prices: &'a PriceTable,
     pub skills: &'a [InstalledSkill],
 }
@@ -89,7 +90,12 @@ pub fn run(conn: &Connection, since: &Since, ctx: &Context) -> Result<Vec<Opport
     let mut out = vec![
         shared_agents_md(conn, since)?,
         copilot_project_instructions(conn, since)?,
+        copilot_plan_mode(conn, since)?,
+        copilot_compact(conn, since)?,
+        copilot_review(conn, since)?,
+        copilot_autopilot(conn, since)?,
     ];
+    out.extend(copilot_feature_catalog(conn, since, ctx.copilot_dir)?);
     conn.execute_batch(
         "CREATE TEMP VIEW sessions AS SELECT * FROM main.sessions WHERE harness = 'claude-code';
          CREATE TEMP VIEW prompts AS SELECT p.* FROM main.prompts p
@@ -391,6 +397,629 @@ fn copilot_project_instructions(conn: &Connection, since: &Since) -> Result<Oppo
             roots.insert(repo_root(&path), ());
         }
     }
+    copilot_project_instructions_from_roots(roots)
+}
+
+fn copilot_plan_mode(conn: &Connection, since: &Since) -> Result<Opportunity> {
+    let mut stmt = conn.prepare(
+                "SELECT s.id, COALESCE(s.title, ''), s.project,
+                        (SELECT COUNT(*) FROM prompts p WHERE p.session_id = s.id AND p.kind = 'prompt'),
+                        (SELECT COUNT(*) FROM tool_calls t WHERE t.session_id = s.id),
+                        (SELECT COUNT(*) FROM session_files f WHERE f.session_id = s.id),
+                        EXISTS (SELECT 1 FROM session_modes m
+                                WHERE m.session_id = s.id AND m.mode = 'plan')
+                          OR EXISTS (SELECT 1 FROM prompts p
+                                     WHERE p.session_id = s.id AND p.kind = 'command'
+                                       AND p.text LIKE '/plan%')
+                 FROM sessions s
+                 WHERE s.harness = 'copilot-cli' AND s.started_at >= ?1",
+            )?;
+    let mut large = 0usize;
+    let mut missed = Vec::new();
+    for row in stmt.query_map([&since.0], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, Option<String>>(2)?,
+            r.get::<_, i64>(3)?,
+            r.get::<_, i64>(4)?,
+            r.get::<_, i64>(5)?,
+            r.get::<_, bool>(6)?,
+        ))
+    })? {
+        let (id, title, project, prompts, tools, files, planned) = row?;
+        if prompts >= 8 || tools >= 15 || files >= 4 {
+            large += 1;
+            if !planned {
+                missed.push((id, title, project, prompts, tools, files));
+            }
+        }
+    }
+    if large == 0 {
+        return Ok(skip());
+    }
+    Ok(Opportunity {
+                id: "copilot-plan-mode",
+                area: "Workflow",
+                status: if missed.is_empty() {
+                    Status::Good
+                } else {
+                    Status::Consider
+                },
+                title: "Plan substantial Copilot tasks before editing".into(),
+                finding: format!(
+                    "{} of {large} substantial Copilot session{} did not use plan mode.",
+                    missed.len(),
+                    if large == 1 { "" } else { "s" }
+                ),
+                why: "Plan mode lets you inspect and adjust Copilot's approach before it changes files, which is most useful when a task spans many tools, files or turns.".into(),
+                fix: "Start substantial tasks with /plan, review the proposed approach, then switch to implementation.".into(),
+                snippet: Some("/plan".into()),
+                saving_usd: None,
+                evidence: missed
+                    .iter()
+                    .take(10)
+                    .map(|(id, title, project, prompts, tools, files)| Evidence {
+                        label: if title.is_empty() {
+                            "(untitled session)".into()
+                        } else {
+                            title.clone()
+                        },
+                        detail: Some(format!(
+                            "{} · {prompts} prompts · {tools} tool calls · {files} files",
+                            project.clone().unwrap_or_default()
+                        )),
+                        link: Some(format!("/sessions#{id}")),
+                    })
+                    .collect(),
+                metric: Metric::lower(missed.len() as f64, "substantial Copilot sessions without plan mode"),
+            })
+}
+
+fn copilot_compact(conn: &Connection, since: &Since) -> Result<Opportunity> {
+    let mut stmt = conn.prepare(
+                "SELECT s.id, COALESCE(s.title, ''), s.project,
+                        (SELECT COUNT(*) FROM prompts p WHERE p.session_id = s.id AND p.kind = 'prompt'),
+                        (SELECT COALESCE(MAX(input_tokens), 0) FROM requests r WHERE r.session_id = s.id),
+                        EXISTS (SELECT 1 FROM prompts p WHERE p.session_id = s.id
+                                AND p.kind = 'command' AND p.text LIKE '/compact%')
+                 FROM sessions s
+                 WHERE s.harness = 'copilot-cli' AND s.started_at >= ?1",
+            )?;
+    let mut long = 0usize;
+    let mut missed = Vec::new();
+    for row in stmt.query_map([&since.0], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, Option<String>>(2)?,
+            r.get::<_, i64>(3)?,
+            r.get::<_, i64>(4)?,
+            r.get::<_, bool>(5)?,
+        ))
+    })? {
+        let (id, title, project, prompts, max_input, compacted) = row?;
+        if prompts >= 20 || max_input >= 100_000 {
+            long += 1;
+            if !compacted {
+                missed.push((id, title, project, prompts, max_input));
+            }
+        }
+    }
+    if long == 0 {
+        return Ok(skip());
+    }
+    Ok(Opportunity {
+                id: "copilot-compact",
+                area: "Context",
+                status: if missed.is_empty() {
+                    Status::Good
+                } else {
+                    Status::Consider
+                },
+                title: "Compact long Copilot sessions before context gets crowded".into(),
+                finding: format!(
+                    "{} of {long} long or high-context Copilot session{} did not use /compact.",
+                    missed.len(),
+                    if long == 1 { "" } else { "s" }
+                ),
+                why: "/compact summarizes conversation history so useful context remains while old turn-by-turn detail stops consuming the context window.".into(),
+                fix: "Run /context when a session grows; use /compact with optional focus instructions before continuing a long task.".into(),
+                snippet: Some("/compact Keep the current implementation decisions and remaining test failures.".into()),
+                saving_usd: None,
+                evidence: missed
+                    .iter()
+                    .take(10)
+                    .map(|(id, title, project, prompts, max_input)| Evidence {
+                        label: if title.is_empty() {
+                            "(untitled session)".into()
+                        } else {
+                            title.clone()
+                        },
+                        detail: Some(format!(
+                            "{} · {prompts} prompts · peak recorded input {} tokens",
+                            project.clone().unwrap_or_default(),
+                            max_input
+                        )),
+                        link: Some(format!("/sessions#{id}")),
+                    })
+                    .collect(),
+                metric: Metric::lower(missed.len() as f64, "long Copilot sessions without compact"),
+            })
+}
+
+fn copilot_review(conn: &Connection, since: &Since) -> Result<Opportunity> {
+    let mut stmt = conn.prepare(
+        "SELECT s.id, COALESCE(s.title, ''), s.project, COUNT(DISTINCT f.file_path),
+                        EXISTS (SELECT 1 FROM prompts p WHERE p.session_id = s.id
+                                AND p.kind = 'command'
+                                AND (p.text LIKE '/review%' OR p.text LIKE '/security-review%'
+                                     OR p.text LIKE '/rubber-duck%'))
+                 FROM sessions s JOIN session_files f ON f.session_id = s.id
+                 WHERE s.harness = 'copilot-cli' AND s.started_at >= ?1
+                 GROUP BY s.id, s.title, s.project",
+    )?;
+    let mut substantial = 0usize;
+    let mut missed = Vec::new();
+    for row in stmt.query_map([&since.0], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, Option<String>>(2)?,
+            r.get::<_, i64>(3)?,
+            r.get::<_, bool>(4)?,
+        ))
+    })? {
+        let (id, title, project, files, reviewed) = row?;
+        if files >= 5 {
+            substantial += 1;
+            if !reviewed {
+                missed.push((id, title, project, files));
+            }
+        }
+    }
+    if substantial == 0 {
+        return Ok(skip());
+    }
+    Ok(Opportunity {
+                id: "copilot-review",
+                area: "Quality",
+                status: if missed.is_empty() {
+                    Status::Good
+                } else {
+                    Status::Consider
+                },
+                title: "Add an independent review after broad Copilot changes".into(),
+                finding: format!(
+                    "{} of {substantial} Copilot session{} changing 5 or more files did not run a review agent.",
+                    missed.len(),
+                    if substantial == 1 { "" } else { "s" }
+                ),
+                why: "A fresh review agent examines the resulting diff rather than continuing the implementation's assumptions, making it useful after broad changes.".into(),
+                fix: "Run /review after substantial changes. Use /security-review for staged or unstaged security-sensitive changes, or /rubber-duck for an independent critique of the approach.".into(),
+                snippet: Some("/review".into()),
+                saving_usd: None,
+                evidence: missed
+                    .iter()
+                    .take(10)
+                    .map(|(id, title, project, files)| Evidence {
+                        label: if title.is_empty() {
+                            "(untitled session)".into()
+                        } else {
+                            title.clone()
+                        },
+                        detail: Some(format!(
+                            "{} · {files} changed files",
+                            project.clone().unwrap_or_default()
+                        )),
+                        link: Some(format!("/sessions#{id}")),
+                    })
+                    .collect(),
+                metric: Metric::lower(missed.len() as f64, "broad Copilot sessions without review"),
+            })
+}
+
+fn copilot_autopilot(conn: &Connection, since: &Since) -> Result<Opportunity> {
+    let mut stmt = conn.prepare(
+        "SELECT p.text, p.session_id FROM prompts p
+                 JOIN sessions s ON s.id = p.session_id
+                 WHERE s.harness = 'copilot-cli' AND p.kind = 'prompt'
+                   AND p.is_sidechain = 0 AND p.ts >= ?1",
+    )?;
+    let mut repeated: BTreeMap<String, (String, i64, HashSet<String>)> = BTreeMap::new();
+    for row in stmt.query_map([&since.0], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })? {
+        let (text, session) = row?;
+        let key = insights::normalise_prompt(&text);
+        if key.split_whitespace().count() < 3 {
+            continue;
+        }
+        let entry = repeated
+            .entry(key)
+            .or_insert_with(|| (text.clone(), 0, HashSet::new()));
+        entry.1 += 1;
+        entry.2.insert(session);
+    }
+    let mut rows: Vec<_> = repeated
+        .into_values()
+        .filter(|(_, count, sessions)| *count >= 4 && sessions.len() >= 2)
+        .collect();
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    if rows.is_empty() {
+        return Ok(skip());
+    }
+    Ok(Opportunity {
+                id: "copilot-autopilot",
+                area: "Automation",
+                status: Status::Consider,
+                title: "Use bounded autopilot for repeated end-to-end tasks".into(),
+                finding: format!(
+                    "{} repeated Copilot task{} appeared 4 or more times across multiple sessions.",
+                    rows.len(),
+                    if rows.len() == 1 { "" } else { "s" }
+                ),
+                why: "Autopilot can plan and execute a well-understood objective with fewer handoffs. It is best for bounded, repeatable work rather than ambiguous changes.".into(),
+                fix: "For a repeated task with clear success criteria, start /autopilot with an explicit objective and an AI-credit limit. Keep destructive operations and final review outside the objective.".into(),
+                snippet: Some("/autopilot <objective> --max-ai-credits <limit>".into()),
+                saving_usd: None,
+                evidence: rows
+                    .iter()
+                    .take(10)
+                    .map(|(example, count, sessions)| Evidence {
+                        label: example.chars().take(140).collect(),
+                        detail: Some(format!("{count}× across {} sessions", sessions.len())),
+                        link: None,
+                    })
+                    .collect(),
+                metric: Metric::lower(rows.len() as f64, "repeatable Copilot tasks not automated"),
+            })
+}
+
+fn copilot_feature_catalog(
+    conn: &Connection,
+    since: &Since,
+    copilot_dir: &Path,
+) -> Result<Vec<Opportunity>> {
+    let sessions: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sessions
+         WHERE harness = 'copilot-cli' AND started_at >= ?1",
+        [&since.0],
+        |r| r.get(0),
+    )?;
+    if sessions == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut commands = BTreeSet::new();
+    let mut stmt = conn.prepare(
+        "SELECT p.text FROM prompts p JOIN sessions s ON s.id = p.session_id
+         WHERE s.harness = 'copilot-cli' AND p.kind = 'command' AND p.ts >= ?1",
+    )?;
+    for row in stmt.query_map([&since.0], |r| r.get::<_, String>(0))? {
+        commands.insert(row?);
+    }
+    let used = |prefixes: &[&str]| {
+        commands
+            .iter()
+            .any(|command| prefixes.iter().any(|prefix| command.starts_with(prefix)))
+    };
+
+    let config = read_json(&copilot_dir.join("config.json"));
+    let settings = read_json(&copilot_dir.join("settings.json"));
+    let setting = |key: &str| settings.get(key).or_else(|| config.get(key));
+    let mut roots = BTreeSet::new();
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT cwd FROM sessions
+         WHERE harness = 'copilot-cli' AND cwd IS NOT NULL AND started_at >= ?1",
+    )?;
+    for row in stmt.query_map([&since.0], |r| r.get::<_, String>(0))? {
+        let path = PathBuf::from(row?);
+        if path.is_dir() {
+            roots.insert(repo_root(&path));
+        }
+    }
+
+    let count_entries = |dir: &Path| {
+        std::fs::read_dir(dir)
+            .map(|entries| entries.filter_map(Result::ok).count())
+            .unwrap_or(0)
+    };
+    let project_hooks: usize = roots
+        .iter()
+        .map(|root| count_entries(&root.join(".github").join("hooks")))
+        .sum();
+    let inline_hooks = setting("hooks")
+        .and_then(Value::as_object)
+        .is_some_and(|hooks| !hooks.is_empty());
+    let hooks_configured = inline_hooks || project_hooks > 0;
+
+    let status_line = setting("statusLine").is_some();
+    let history_size = setting("commandHistoryMaxSize")
+        .and_then(Value::as_i64)
+        .unwrap_or(50);
+    let custom_agents = count_entries(&copilot_dir.join("agents"))
+        + roots
+            .iter()
+            .map(|root| count_entries(&root.join(".github").join("agents")))
+            .sum::<usize>();
+    let subagents_used = custom_agents > 0 || used(&["/fleet", "/subagents", "/tasks", "/agent"]);
+    let worktrees_used = used(&["/worktree", "/fork worktree", "/move"]);
+    let notifications = setting("notifications").and_then(Value::as_bool) == Some(true);
+    let keep_alive = setting("keepAlive")
+        .and_then(Value::as_str)
+        .is_some_and(|mode| mode != "off")
+        || used(&["/keep-alive"]);
+    let memory_enabled = setting("memory").and_then(Value::as_bool) != Some(false);
+    let handoff_used = used(&["/remote", "/delegate", "/share"]);
+    let context_controls_used = used(&["/context", "/limits", "/rewind"]);
+    let prompt_tools_used = used(&["/refine", "/ask", "/research"]);
+    let development_integrations_used = used(&["/ide", "/lsp"]);
+    let session_navigation_used = used(&["/resume", "/session", "/search"]);
+
+    let mcp_servers = read_json(&copilot_dir.join("mcp-config.json"))
+        .get("mcpServers")
+        .and_then(Value::as_object)
+        .map_or(0, serde_json::Map::len);
+    let plugins = count_entries(&copilot_dir.join("installed-plugins"));
+    let skills = count_entries(&copilot_dir.join("skills"))
+        + roots
+            .iter()
+            .map(|root| count_entries(&root.join(".github").join("skills")))
+            .sum::<usize>();
+    let extensions_configured = mcp_servers + plugins + skills + custom_agents > 0;
+
+    Ok(vec![
+        copilot_feature(
+            "copilot-hooks",
+            hooks_configured,
+            "Automate checks and guardrails with Copilot hooks",
+            if hooks_configured {
+                format!(
+                    "Hooks are configured{}.",
+                    if project_hooks > 0 {
+                        format!(" in {project_hooks} project hook file(s)")
+                    } else {
+                        String::new()
+                    }
+                )
+            } else {
+                "No user-level or repository Copilot hooks were discovered.".into()
+            },
+            "Hooks run deterministic commands around tool and session events, which is useful for formatting, validation, audit logging and policy checks.",
+            "Add user-level hooks under the hooks setting, or commit repository hooks under .github/hooks. Use copilot help config for the current event schema.",
+            Some("copilot help config"),
+        ),
+        copilot_feature(
+            "copilot-status-line",
+            status_line,
+            "Add a Copilot status line",
+            if status_line {
+                "A custom status line is configured.".into()
+            } else {
+                "No statusLine configuration was found.".into()
+            },
+            "A status line can keep the model, context usage, repository state or current task visible without interrupting the conversation.",
+            "Run /statusline to configure a command-backed status line.",
+            Some("/statusline"),
+        ),
+        Opportunity {
+            id: "copilot-command-history",
+            area: "Copilot CLI",
+            status: if history_size >= 200 {
+                Status::Good
+            } else {
+                Status::Consider
+            },
+            title: "Keep more prompt history available".into(),
+            finding: format!(
+                "Copilot keeps up to {history_size} recent prompt{} for Ctrl+R and history navigation.",
+                if history_size == 1 { "" } else { "s" }
+            ),
+            why: "A larger command history makes recurring prompts easier to recover without searching old sessions. This is separate from resumable session history, which Copilot stores automatically.".into(),
+            fix: "Increase commandHistoryMaxSize if you often reuse older prompts; Copilot supports values from 1 to 1000.".into(),
+            snippet: Some("/settings commandHistoryMaxSize 200".into()),
+            saving_usd: None,
+            evidence: Vec::new(),
+            metric: Metric::higher(history_size as f64, "prompts retained in command history"),
+        },
+        copilot_feature(
+            "copilot-subagents",
+            subagents_used,
+            "Use Copilot subagents and fleet mode",
+            if subagents_used {
+                format!(
+                    "Subagent features or custom agents were found{}.",
+                    if custom_agents > 0 {
+                        format!(" ({custom_agents} custom agent(s))")
+                    } else {
+                        String::new()
+                    }
+                )
+            } else {
+                "No /fleet, /subagents, /tasks or custom-agent usage was found in this period."
+                    .into()
+            },
+            "Subagents isolate investigation and parallelize independent work instead of growing one conversation with every intermediate detail.",
+            "Use /subagents to choose subagent models and /fleet for a task with genuinely independent workstreams.",
+            Some("/subagents"),
+        ),
+        copilot_feature(
+            "copilot-worktrees",
+            worktrees_used,
+            "Isolate parallel work with Copilot worktrees",
+            if worktrees_used {
+                "Worktree commands were used in this period.".into()
+            } else {
+                "No /worktree, /fork worktree or /move usage was recorded.".into()
+            },
+            "A separate worktree keeps experimental or parallel changes away from the current dirty working tree while preserving a normal Git workflow.",
+            "Use /fork worktree to preserve the current conversation, or /move to move uncommitted changes into a new worktree.",
+            Some("/fork worktree"),
+        ),
+        copilot_feature(
+            "copilot-notifications",
+            notifications,
+            "Enable attention notifications",
+            if notifications {
+                "Copilot desktop notifications are enabled.".into()
+            } else {
+                "The notifications setting is not enabled.".into()
+            },
+            "Notifications reduce polling when a long-running turn finishes or Copilot needs a decision.",
+            "Enable notifications in Copilot settings. Supported terminals can also use terminalNotifications.",
+            Some("/settings notifications on"),
+        ),
+        copilot_feature(
+            "copilot-keep-alive",
+            keep_alive,
+            "Prevent sleep during long Copilot tasks",
+            if keep_alive {
+                "Keep-alive mode is configured or was used in this period.".into()
+            } else {
+                "Keep-alive is off and /keep-alive was not used.".into()
+            },
+            "Long builds, test suites and autopilot tasks can be interrupted when the machine sleeps.",
+            "Use busy mode so sleep is prevented only while Copilot is actively working.",
+            Some("/keep-alive busy"),
+        ),
+        copilot_feature(
+            "copilot-memory",
+            memory_enabled,
+            "Keep Copilot cross-session memory enabled",
+            if memory_enabled {
+                "Agentic memory is enabled (the default).".into()
+            } else {
+                "The memory setting explicitly disables cross-session recall.".into()
+            },
+            "Memory lets Copilot retain useful project facts across sessions so recurring conventions need less explanation.",
+            "Enable memory unless project policy requires it to remain off.",
+            Some("/memory on"),
+        ),
+        copilot_feature(
+            "copilot-extensions",
+            extensions_configured,
+            "Extend Copilot with MCP, plugins, agents and skills",
+            if extensions_configured {
+                format!(
+                    "{mcp_servers} MCP server(s), {plugins} plugin(s), {custom_agents} custom agent(s) and {skills} skill(s) were discovered."
+                )
+            } else {
+                "No MCP servers, installed plugins, custom agents or skills were discovered."
+                    .into()
+            },
+            "Extensions turn repeated organization and project workflows into reusable capabilities instead of prompt text.",
+            "Inspect /mcp, /plugin, /agent and /skills, then add only integrations tied to work you repeat.",
+            Some("/env"),
+        ),
+        copilot_feature(
+            "copilot-handoff",
+            handoff_used,
+            "Use remote sessions and delegation when work can continue elsewhere",
+            if handoff_used {
+                "Remote, delegation or sharing commands were used in this period.".into()
+            } else {
+                "No /remote, /delegate or /share usage was recorded.".into()
+            },
+            "Remote control keeps a live session accessible from GitHub web or mobile; delegation can hand a suitable task to GitHub for a pull request.",
+            "Use /remote for an active session, /share for a report, or /delegate when the task is well-scoped and PR-ready.",
+            Some("/remote"),
+        ),
+        copilot_feature(
+            "copilot-context-controls",
+            context_controls_used,
+            "Use context, limits and rewind controls",
+            if context_controls_used {
+                "Context, limit or rewind commands were used in this period.".into()
+            } else {
+                "No /context, /limits or /rewind usage was recorded.".into()
+            },
+            "These controls show context pressure, cap AI-credit use and undo a turn together with its file changes.",
+            "Use /context during long sessions, /limits for bounded work and /rewind when a turn takes the implementation in the wrong direction.",
+            Some("/context"),
+        ),
+        copilot_feature(
+            "copilot-prompt-tools",
+            prompt_tools_used,
+            "Use side questions, prompt refinement and research",
+            if prompt_tools_used {
+                "Prompt-support or research commands were used in this period.".into()
+            } else {
+                "No /ask, /refine or /research usage was recorded.".into()
+            },
+            "These commands keep quick questions out of the main history, turn rough notes into a reviewable prompt and separate research from implementation.",
+            "Try /ask for a side question, /refine before submitting an ambiguous task, or /research for a source-backed investigation.",
+            Some("/refine"),
+        ),
+        copilot_feature(
+            "copilot-development-integrations",
+            development_integrations_used,
+            "Connect Copilot to IDE and language-server context",
+            if development_integrations_used {
+                "IDE or language-server commands were used in this period.".into()
+            } else {
+                "No /ide or /lsp usage was recorded.".into()
+            },
+            "IDE selections, diagnostics and language-server information can give Copilot more precise code context than filesystem search alone.",
+            "Use /ide to connect a workspace and /lsp to inspect or manage configured language servers.",
+            Some("/ide"),
+        ),
+        copilot_feature(
+            "copilot-session-navigation",
+            session_navigation_used,
+            "Return to useful Copilot sessions",
+            if session_navigation_used {
+                "Session resume, management or search commands were used in this period.".into()
+            } else {
+                "No /resume, /session or /search usage was recorded.".into()
+            },
+            "Copilot stores resumable sessions locally. Reusing the right session preserves task context without keeping every task in one oversized conversation.",
+            "Use /session to browse, /resume to reopen a relevant session and /search to find earlier conversation content when available.",
+            Some("/session"),
+        ),
+    ])
+}
+
+fn copilot_feature(
+    id: &'static str,
+    configured: bool,
+    title: &str,
+    finding: String,
+    why: &str,
+    fix: &str,
+    snippet: Option<&str>,
+) -> Opportunity {
+    Opportunity {
+        id,
+        area: match id {
+            "copilot-hooks" => "Automation",
+            "copilot-status-line" | "copilot-notifications" | "copilot-keep-alive" => "Interface",
+            "copilot-command-history"
+            | "copilot-memory"
+            | "copilot-context-controls"
+            | "copilot-session-navigation" => "Context",
+            "copilot-subagents" | "copilot-extensions" => "Agents",
+            "copilot-worktrees" | "copilot-handoff" => "Workflow",
+            "copilot-prompt-tools" | "copilot-development-integrations" => "Quality",
+            _ => "Copilot CLI",
+        },
+        status: if configured {
+            Status::Good
+        } else {
+            Status::Consider
+        },
+        title: title.into(),
+        finding,
+        why: why.into(),
+        fix: fix.into(),
+        snippet: snippet.map(str::to_string),
+        saving_usd: None,
+        evidence: Vec::new(),
+        metric: None,
+    }
+}
+
+fn copilot_project_instructions_from_roots(roots: BTreeMap<PathBuf, ()>) -> Result<Opportunity> {
     if roots.is_empty() {
         return Ok(skip());
     }
@@ -410,7 +1039,7 @@ fn copilot_project_instructions(conn: &Connection, since: &Since) -> Result<Oppo
         .collect();
     Ok(Opportunity {
         id: "copilot-project-instructions",
-        area: "Copilot CLI",
+        area: "Instructions",
         status: if missing.is_empty() {
             Status::Good
         } else {

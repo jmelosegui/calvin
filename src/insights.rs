@@ -192,6 +192,7 @@ pub struct CostRow {
     pub cache_read: i64,
     pub cache_write: i64,
     pub cost_usd: f64,
+    pub ai_units: f64,
 }
 
 pub fn cost(conn: &Connection, since: &Since, by: CostBy) -> Result<Vec<CostRow>> {
@@ -203,7 +204,8 @@ pub fn cost(conn: &Connection, since: &Since, by: CostBy) -> Result<Vec<CostRow>
     let sql = format!(
         "SELECT {key} AS key, COUNT(DISTINCT r.session_id), COUNT(*),
                 SUM(r.input_tokens), SUM(r.output_tokens), SUM(r.cache_read),
-                SUM(r.cache_write_5m + r.cache_write_1h), COALESCE(SUM(r.cost_usd), 0) AS cost
+                SUM(r.cache_write_5m + r.cache_write_1h), COALESCE(SUM(r.cost_usd), 0) AS cost,
+                COALESCE(SUM(r.ai_units), 0) AS ai_units
          FROM requests r LEFT JOIN sessions s ON s.id = r.session_id
          WHERE r.ts >= ?1 GROUP BY key ORDER BY {order}"
     );
@@ -219,6 +221,7 @@ pub fn cost(conn: &Connection, since: &Since, by: CostBy) -> Result<Vec<CostRow>
                 cache_read: r.get(5)?,
                 cache_write: r.get(6)?,
                 cost_usd: r.get(7)?,
+                ai_units: r.get(8)?,
             })
         })?
         .collect::<Result<_, _>>()?;
@@ -590,6 +593,7 @@ pub struct ModelRow {
     pub cache_read: i64,
     pub cache_write: i64,
     pub cost_usd: f64,
+    pub ai_units: f64,
     pub cache_hit_rate: Option<f64>,
     /// Requests and cost per effort level, most used first. `effort` is `None` where
     /// the model or harness doesn't record one.
@@ -601,6 +605,7 @@ pub struct EffortShare {
     pub effort: Option<String>,
     pub requests: i64,
     pub cost_usd: f64,
+    pub ai_units: f64,
 }
 
 /// Usage per model, most expensive first.
@@ -610,9 +615,10 @@ pub fn models(conn: &Connection, since: &Since) -> Result<Vec<ModelRow>> {
             "SELECT model, COUNT(*), COALESCE(SUM(is_sidechain), 0), COUNT(DISTINCT session_id),
                     COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
                     COALESCE(SUM(cache_read), 0), COALESCE(SUM(cache_write_5m + cache_write_1h), 0),
-                    COALESCE(SUM(cost_usd), 0)
+                    COALESCE(SUM(cost_usd), 0) AS cost_usd,
+                    COALESCE(SUM(ai_units), 0) AS ai_units
              FROM requests WHERE ts >= ?1 AND model IS NOT NULL
-             GROUP BY model ORDER BY 9 DESC, 2 DESC",
+             GROUP BY model ORDER BY (cost_usd + ai_units * 0.01) DESC, 2 DESC",
         )?
         .query_map([&since.0], |r| {
             let input: i64 = r.get(4)?;
@@ -628,6 +634,7 @@ pub fn models(conn: &Connection, since: &Since) -> Result<Vec<ModelRow>> {
                 cache_read: read,
                 cache_write: write,
                 cost_usd: r.get(8)?,
+                ai_units: r.get(9)?,
                 cache_hit_rate: ratio(Some(read), Some(read + write + input)),
                 efforts: Vec::new(),
             })
@@ -635,7 +642,8 @@ pub fn models(conn: &Connection, since: &Since) -> Result<Vec<ModelRow>> {
         .collect::<Result<Vec<_>, _>>()?;
     let mut rows = rows;
     let mut stmt = conn.prepare(
-        "SELECT model, effort, COUNT(*), COALESCE(SUM(cost_usd), 0) FROM requests
+        "SELECT model, effort, COUNT(*), COALESCE(SUM(cost_usd), 0),
+                COALESCE(SUM(ai_units), 0) FROM requests
          WHERE ts >= ?1 AND model IS NOT NULL GROUP BY model, effort ORDER BY 3 DESC",
     )?;
     let mut shares = stmt.query([&since.0])?;
@@ -646,6 +654,7 @@ pub fn models(conn: &Connection, since: &Since) -> Result<Vec<ModelRow>> {
                 effort: r.get(1)?,
                 requests: r.get(2)?,
                 cost_usd: r.get(3)?,
+                ai_units: r.get(4)?,
             });
         }
     }
@@ -659,6 +668,7 @@ pub struct SessionRow {
     pub title: Option<String>,
     pub first_prompt: Option<String>,
     pub project: Option<String>,
+    pub cwd: Option<String>,
     pub git_branch: Option<String>,
     pub started_at: String,
     pub ended_at: Option<String>,
@@ -678,7 +688,7 @@ pub fn sessions(conn: &Connection, since: &Since, limit: i64) -> Result<Vec<Sess
             "SELECT s.id, s.harness, s.title,
                     (SELECT substr(text, 1, 200) FROM prompts p
                      WHERE p.session_id = s.id AND p.is_sidechain = 0 ORDER BY p.ts LIMIT 1),
-                    s.project, s.git_branch, s.started_at, s.ended_at,
+                    s.project, s.cwd, s.git_branch, s.started_at, s.ended_at,
                     (SELECT COUNT(*) FROM prompts p WHERE p.session_id = s.id AND p.is_sidechain = 0),
                     (SELECT COUNT(*) FROM requests r WHERE r.session_id = s.id),
                     (SELECT COALESCE(SUM(cost_usd), 0) FROM requests r WHERE r.session_id = s.id),
@@ -696,15 +706,16 @@ pub fn sessions(conn: &Connection, since: &Since, limit: i64) -> Result<Vec<Sess
                 title: r.get(2)?,
                 first_prompt: r.get(3)?,
                 project: r.get(4)?,
-                git_branch: r.get(5)?,
-                started_at: r.get(6)?,
-                ended_at: r.get(7)?,
-                prompts: r.get(8)?,
-                requests: r.get(9)?,
-                cost_usd: r.get(10)?,
-                ai_units: r.get(11)?,
-                tool_calls: r.get(12)?,
-                friction: r.get(13)?,
+                cwd: r.get(5)?,
+                git_branch: r.get(6)?,
+                started_at: r.get(7)?,
+                ended_at: r.get(8)?,
+                prompts: r.get(9)?,
+                requests: r.get(10)?,
+                cost_usd: r.get(11)?,
+                ai_units: r.get(12)?,
+                tool_calls: r.get(13)?,
+                friction: r.get(14)?,
             })
         })?
         .filter(|r| r.as_ref().map_or(true, |s| s.prompts > 0 || s.requests > 0))

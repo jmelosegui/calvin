@@ -731,6 +731,7 @@ fn compute_opportunities(
     let skills = installed_skills(st, c)?;
     let ctx = crate::opportunities::Context {
         claude_dir: &st.claude_dir,
+        copilot_dir: &st.copilot_dir,
         prices: &st.prices,
         skills: &skills,
     };
@@ -823,14 +824,29 @@ fn advisor_prompt(st: &AppState, c: &Connection, since_text: &str) -> Result<Str
         &st.copilot_dir,
     )?);
     let advisor = st.advisor.read().unwrap().clone();
-    let docs = match advisor.provider.as_str() {
-        "claude-code" if advisor.claude_code.research => advisor.claude_code.docs_index,
-        "command" => advisor.command.docs_index,
-        _ => String::new(),
-    };
-    if !docs.trim().is_empty() {
+    let (has_claude, has_copilot): (bool, bool) = c.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sessions WHERE harness = 'claude-code'),
+                EXISTS(SELECT 1 FROM sessions WHERE harness = 'copilot-cli')",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    inventory.push_str("\n## Required official documentation sources\n");
+    if has_claude && !advisor.claude_code.docs_index.trim().is_empty() {
         inventory.push_str(&format!(
-            "- Official documentation index: {docs} (fetch it for the current feature list)\n"
+            "- Claude Code: {}\n",
+            advisor.claude_code.docs_index
+        ));
+    }
+    if has_copilot {
+        inventory.push_str(
+            "- GitHub Copilot CLI: https://docs.github.com/en/copilot/how-tos/copilot-cli\n\
+             - GitHub Copilot CLI command reference: https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference\n",
+        );
+    }
+    if advisor.provider == "command" && !advisor.command.docs_index.trim().is_empty() {
+        inventory.push_str(&format!(
+            "- Additional advisor documentation: {}\n",
+            advisor.command.docs_index
         ));
     }
     Ok(crate::advisor::build_prompt(

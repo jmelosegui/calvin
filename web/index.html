@@ -25,11 +25,13 @@
   <div class="titlebar">
     <h1>How I work with the <span class="px">MODELS</span></h1>
     <div class="actions">
-      <div class="seg" id="harness">
-        <button data-harness="" class="active">All</button>
-        <button data-harness="claude-code">Claude Code</button>
-        <button data-harness="copilot-cli">Copilot CLI</button>
-      </div>
+      <label class="cli-picker">CLI
+        <select id="harness">
+          <option value="">All tools</option>
+          <option value="claude-code">Claude Code</option>
+          <option value="copilot-cli">Copilot CLI</option>
+        </select>
+      </label>
       <div class="seg" id="range">
         <button data-days="7">7d</button>
         <button data-days="30" class="active">30d</button>
@@ -50,8 +52,9 @@
     </section>
 
     <section class="panel span-8" id="costPanel">
-      <h2>Spend per day</h2>
-      <p class="sub">Estimated from token counts at API list price. Hover a bar for the day.</p>
+      <h2 id="costTitle">Billing usage per day</h2>
+      <p class="sub" id="costNote">Claude estimates and Copilot's converted AI credits share one USD axis. Hover a bar for the day.</p>
+      <div class="billing-legend" id="costLegend"></div>
       <svg id="costChart" viewBox="0 0 900 330"></svg>
     </section>
 
@@ -75,8 +78,8 @@
     </section>
 
     <section class="panel span-6">
-      <h2>Spend by project</h2>
-      <p class="sub">Where the tokens go.</p>
+      <h2 id="projectTitle">Billing value by project</h2>
+      <p class="sub" id="projectNote">Where the estimated or equivalent USD goes.</p>
       <div class="hbars" id="projects"></div>
     </section>
 
@@ -88,7 +91,7 @@
 
     <section class="panel">
       <h2>Models</h2>
-      <p class="sub">Which models did the work, and what each cost. Subagents often do simpler work that a cheaper model can handle.</p>
+      <p class="sub" id="modelsNote">Which models did the work and their estimated or equivalent USD value.</p>
       <div class="hbars" id="models"></div>
       <p class="never" id="modelnote"></p>
     </section>
@@ -110,6 +113,9 @@
     // Log content is untrusted: always escape before putting it in HTML.
     const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
     const money = (v) => "$" + (v >= 100 ? v.toFixed(0) : v.toFixed(2));
+    const AI_CREDIT_USD = 0.01;
+    const aiCreditUsd = (credits) => credits * AI_CREDIT_USD;
+    const approxAiUsd = (credits) => `~${money(aiCreditUsd(credits))}`;
     const num = (n) => (n ?? 0).toLocaleString();
     const tok = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n));
     const fmtDate = (d) => d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
@@ -131,7 +137,7 @@
     const hideTip = () => (tip.style.opacity = 0);
 
     let range = 30;
-    const selectedHarness = () => $("#harness button.active")?.dataset.harness ?? "";
+    const selectedHarness = () => $("#harness").value;
 
     // ---------- KPIs ----------
     function renderKpis(s, skills) {
@@ -139,12 +145,15 @@
       const used = installed.filter((k) => k.model_runs + k.command_runs > 0).length;
       const cache = s.cache_hit_rate == null ? "–" : (s.cache_hit_rate * 100).toFixed(0) + "<small>%</small>";
       const copilotOnly = selectedHarness() === "copilot-cli";
+      const claudeOnly = selectedHarness() === "claude-code";
       $("#kpis").innerHTML = [
         ["Sessions", num(s.sessions), `${num(s.requests)} model requests`],
         ["Prompts", num(s.prompts), `plus ${num(s.commands)} slash commands`],
         copilotOnly
-          ? ["AI units", s.ai_units.toFixed(2), "reported by Copilot CLI"]
-          : ["Est. cost", money(s.cost_usd), "Claude API list-price estimate"],
+          ? ["AI units", s.ai_units.toFixed(2), `${approxAiUsd(s.ai_units)} overage equivalent · 1 AIU = $0.01`]
+          : claudeOnly
+            ? ["Est. cost", money(s.cost_usd), "Claude API list-price estimate"]
+            : ["Billing value", `~${money(s.cost_usd + aiCreditUsd(s.ai_units))}`, `${money(s.cost_usd)} Claude estimate + ${approxAiUsd(s.ai_units)} Copilot equivalent`],
         copilotOnly
           ? ["Cache hit rate", "–", "not comparable with Claude cache data"]
           : ["Cache hit rate", cache, "Claude input served from cache"],
@@ -160,13 +169,15 @@
         return;
       }
       const name = (id) => id === "claude-code" ? "Claude Code" : id === "copilot-cli" ? "Copilot CLI" : id;
-      const colors = ["#ff641f", "#6ca8ff", "#8bd450", "#d783ff", "#ffd166", "#4dd9c0"];
+      const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      const fallback = ["#8bd450", "#d783ff", "#ffd166", "#4dd9c0"];
+      const color = (id, index) => id === "claude-code" ? css("--claude") : id === "copilot-cli" ? css("--copilot") : fallback[index % fallback.length];
       const totalSessions = rows.reduce((n, r) => n + r.sessions, 0);
       let cursor = 0;
       const stops = rows.map((r, i) => {
         const start = cursor;
         cursor += totalSessions ? (r.sessions / totalSessions) * 100 : 0;
-        return `${colors[i % colors.length]} ${start}% ${cursor}%`;
+        return `${color(r.harness, i)} ${start}% ${cursor}%`;
       }).join(", ");
       const metrics = [
         ["Prompts / session", (r) => r.sessions ? (r.prompts + r.commands) / r.sessions : 0, (v) => v.toFixed(1)],
@@ -179,7 +190,7 @@
         return `<div class="compare-metric"><div class="compare-label">${label}</div>${rows.map((r, i) => `
           <div class="compare-row">
             <span>${esc(name(r.harness))}</span>
-            <div class="compare-track"><i style="width:${(values[i] / max) * 100}%;background:${colors[i % colors.length]}"></i></div>
+            <div class="compare-track"><i style="width:${(values[i] / max) * 100}%;background:${color(r.harness, i)}"></i></div>
             <b>${format(values[i])}</b>
           </div>`).join("")}</div>`;
       }).join("");
@@ -187,8 +198,8 @@
         const share = totalSessions ? Math.round((r.sessions / totalSessions) * 100) : 0;
         const billing = r.harness === "claude-code"
           ? `${money(r.cost_usd ?? 0)} estimated cost`
-          : r.ai_units == null ? "billing unavailable" : `${r.ai_units.toFixed(2)} AI units`;
-        return `<div class="mix-legend"><i style="background:${colors[i % colors.length]}"></i><span><b>${esc(name(r.harness))}</b><small>${num(r.sessions)} sessions · ${share}% · ${esc(billing)}</small></span></div>`;
+          : r.ai_units == null ? "billing unavailable" : `${r.ai_units.toFixed(2)} AI units · ${approxAiUsd(r.ai_units)} overage equivalent`;
+        return `<div class="mix-legend"><i style="background:${color(r.harness, i)}"></i><span><b>${esc(name(r.harness))}</b><small>${num(r.sessions)} sessions · ${share}% · ${esc(billing)}</small></span></div>`;
       }).join("");
       $("#comparison").innerHTML = `<div class="compare-grid">
         <div class="mix">
@@ -201,6 +212,21 @@
 
     // ---------- cost chart ----------
     function renderCost(rows) {
+      const harness = selectedHarness();
+      const showClaude = harness !== "copilot-cli";
+      const showCopilot = harness !== "claude-code";
+      $("#costTitle").textContent = harness === "claude-code" ? "Claude Code spend per day"
+        : harness === "copilot-cli" ? "Copilot equivalent spend per day"
+        : "Billing value per day";
+      $("#costNote").textContent = harness === "claude-code"
+        ? "Estimated from token counts at API list price. Hover a bar for the day."
+        : harness === "copilot-cli"
+          ? "Approximate USD overage value at 1 AI credit = $0.01. Hover a bar for the raw credit count."
+          : "Both providers share one USD axis: Claude API list-price estimate and Copilot AI credits converted at $0.01 each.";
+      $("#costLegend").innerHTML = [
+        showClaude ? `<span class="claude-code"><i></i>Claude: estimated API list-price USD</span>` : "",
+        showCopilot ? `<span class="copilot-cli"><i></i>Copilot: approximate USD overage value (1 AI credit = $0.01; included credits may mean $0 billed)</span>` : "",
+      ].join("");
       const byDay = new Map(rows.map((r) => [r.key, r]));
       const days = [];
       for (let i = range - 1; i >= 0; i--) {
@@ -208,39 +234,58 @@
         d.setHours(12, 0, 0, 0);
         d.setDate(d.getDate() - i);
         const r = byDay.get(localDay(d));
-        days.push({ d, cost: r?.cost_usd ?? 0, sessions: r?.sessions ?? 0, requests: r?.requests ?? 0 });
+        const units = r?.ai_units ?? 0;
+        days.push({ d, cost: r?.cost_usd ?? 0, units, copilotUsd: aiCreditUsd(units), sessions: r?.sessions ?? 0, requests: r?.requests ?? 0 });
       }
       const svg = $("#costChart");
       svg.innerHTML = "";
-      const W = 900, H = 330, L = 46, R = 6, T = 10, B = 26;
+      const W = 900, H = 330, L = 56, R = 6, T = 10, B = 26;
       const pw = W - L - R, ph = H - T - B;
-      const max = Math.max(1, ...days.map((d) => d.cost));
-      const step = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000].find((s) => max / s <= 5) ?? 2000;
-      const top = Math.ceil(max / step) * step;
-      const y = (v) => T + ph - (v / top) * ph;
+      const scale = (max) => {
+        if (max <= 0) return { top: 1, step: 0.2 };
+        const rough = max / 5;
+        const power = 10 ** Math.floor(Math.log10(rough));
+        const step = [1, 2, 5, 10].map((n) => n * power).find((n) => n >= rough);
+        return { top: Math.ceil(max / step) * step, step };
+      };
+      const values = days.flatMap((d) => [showClaude ? d.cost : 0, showCopilot ? d.copilotUsd : 0]);
+      const usd = scale(Math.max(...values));
+      const y = (v, top) => T + ph - (v / top) * ph;
+      const axis = (v) => v < 1 ? v.toFixed(2) : v < 10 ? v.toFixed(1) : v.toFixed(0);
 
-      for (let v = 0; v <= top; v += step) {
-        svg.append(el("line", { x1: L, x2: W - R, y1: y(v), y2: y(v), class: "grid-line" }));
-        svg.append(el("text", { x: L - 8, y: y(v) + 4, "text-anchor": "end" }, "$" + v));
+      for (let v = 0; v <= usd.top + usd.step / 2; v += usd.step) {
+        svg.append(el("line", { x1: L, x2: W - R, y1: y(v, usd.top), y2: y(v, usd.top), class: "grid-line" }));
+        svg.append(el("text", { x: L - 8, y: y(v, usd.top) + 4, "text-anchor": "end" }, "$" + axis(v)));
       }
       const slot = pw / days.length;
-      const bw = Math.max(2, slot - 2);
+      const series = (showClaude ? 1 : 0) + (showCopilot ? 1 : 0);
+      const gap = series > 1 ? 1 : 0;
+      const bw = Math.max(2, (slot - 2 - gap) / series);
       const labelEvery = Math.ceil(days.length / 7);
       days.forEach((d, i) => {
-        const x = L + i * slot + (slot - bw) / 2;
-        const h = Math.max(0, y(0) - y(d.cost));
-        const r = Math.min(4, bw / 2, h);
+        const baseX = L + i * slot + (slot - (bw * series + gap * (series - 1))) / 2;
         const hit = el("rect", { x: L + i * slot, y: T, width: slot, height: ph, class: "hit" });
-        hit.addEventListener("mousemove", (e) =>
-          showTip(e, `<b>${fmtDate(d.d)}</b><br>${money(d.cost)} · ${d.sessions} sessions<br><span class="m">${num(d.requests)} model requests</span>`));
+        hit.addEventListener("mousemove", (e) => {
+          const billing = [
+            showClaude ? money(d.cost) + " Claude estimate" : "",
+            showCopilot ? `${d.units.toFixed(2)} Copilot AIU · ${approxAiUsd(d.units)} overage equivalent` : "",
+          ].filter(Boolean).join("<br>");
+          showTip(e, `<b>${fmtDate(d.d)}</b><br>${billing}<br><span class="m">${d.sessions} sessions · ${num(d.requests)} model requests</span>`);
+        });
         hit.addEventListener("mouseleave", hideTip);
         svg.append(hit);
-        if (h > 0) {
+        const draw = (value, top, x, cls) => {
+          const h = Math.max(0, y(0, top) - y(value, top));
+          const r = Math.min(4, bw / 2, h);
+          if (h <= 0) return;
           svg.append(el("path", {
-            class: "bar",
-            d: `M${x},${y(0)} V${y(0) - h + r} Q${x},${y(0) - h} ${x + r},${y(0) - h} H${x + bw - r} Q${x + bw},${y(0) - h} ${x + bw},${y(0) - h + r} V${y(0)} Z`,
+            class: `bar ${cls}`,
+            d: `M${x},${y(0, top)} V${y(0, top) - h + r} Q${x},${y(0, top) - h} ${x + r},${y(0, top) - h} H${x + bw - r} Q${x + bw},${y(0, top) - h} ${x + bw},${y(0, top) - h + r} V${y(0, top)} Z`,
           }));
-        }
+        };
+        let offset = 0;
+        if (showClaude) { draw(d.cost, usd.top, baseX, "claude-code"); offset = bw + gap; }
+        if (showCopilot) draw(d.copilotUsd, usd.top, baseX + offset, "copilot-cli");
         if (i % labelEvery === 0) svg.append(el("text", { x: L + i * slot + slot / 2, y: H - 6, "text-anchor": "middle" }, fmtDate(d.d)));
       });
     }
@@ -346,7 +391,8 @@
       const sorted = [...known].sort((a, b) => EFFORT_ORDER.indexOf(a.effort) - EFFORT_ORDER.indexOf(b.effort));
       return `<span class="effort-label">Effort</span>` + sorted.map((e) => {
         const pct = Math.round((e.requests / r.requests) * 100);
-        return `<span class="effort" title="${num(e.requests)} requests · ${money(e.cost_usd)}">${esc(e.effort)} <b>${pct}%</b></span>`;
+        const value = e.cost_usd + aiCreditUsd(e.ai_units ?? 0);
+        return `<span class="effort" title="${num(e.requests)} requests · ${e.ai_units ? approxAiUsd(e.ai_units) + " equivalent" : money(value)}">${esc(e.effort)} <b>${pct}%</b></span>`;
       }).join("");
     }
 
@@ -356,20 +402,30 @@
         $("#modelnote").textContent = "";
         return;
       }
-      const max = Math.max(...rows.map((r) => r.cost_usd), 1e-9);
-      const total = rows.reduce((t, r) => t + r.cost_usd, 0);
+      const billingValue = (r) => r.cost_usd + aiCreditUsd(r.ai_units ?? 0);
+      rows = [...rows].sort((a, b) => billingValue(b) - billingValue(a));
+      const max = Math.max(...rows.map(billingValue), 1e-9);
+      const total = rows.reduce((t, r) => t + billingValue(r), 0);
       const requests = rows.reduce((t, r) => t + r.requests, 0);
+      const copilotOnly = selectedHarness() === "copilot-cli";
+      $("#modelsNote").textContent = copilotOnly
+        ? "Which models did the work. USD values approximate Copilot overage pricing at 1 AI credit = $0.01."
+        : "Which models did the work and their estimated or equivalent USD value. Subagents often do simpler work that a cheaper model can handle.";
       $("#models").innerHTML = rows.map((r, i) => {
-        const share = total ? Math.round((r.cost_usd / total) * 100) : 0;
+        const value = billingValue(r);
+        const share = total ? Math.round((value / total) * 100) : 0;
         const sub = r.subagent_requests ? ` (${Math.round((r.subagent_requests / r.requests) * 100)}% by subagents)` : "";
         const cache = r.cache_hit_rate == null ? "" : ` · ${Math.round(r.cache_hit_rate * 100)}% cache hits`;
+        const displayValue = r.ai_units
+          ? `${approxAiUsd(r.ai_units)}${r.cost_usd ? ` + ${money(r.cost_usd)}` : ""}`
+          : money(r.cost_usd);
         return `
           <div class="hbar">
-            <div class="name ${i ? "dim" : ""}" title="${esc(r.model)}">${esc(modelName(r.model))} <span style="color:var(--faint);font-weight:500">· ${share}% of spend</span></div>
+            <div class="name ${i ? "dim" : ""}" title="${esc(r.model)}">${esc(modelName(r.model))} <span style="color:var(--faint);font-weight:500">· ${share}% of billing value</span></div>
             <div class="row">
-              <div class="box ${i ? "" : "hot"}" style="width:${(r.cost_usd / max) * 55}%"></div>
+              <div class="box ${i ? "" : "hot"}" style="width:${(value / max) * 55}%"></div>
               <div class="track"></div>
-              <div class="val">${money(r.cost_usd)}</div>
+              <div class="val">${displayValue}</div>
             </div>
             <div class="sub" style="margin:4px 0 0">${num(r.requests)} requests${sub} · ${tok(r.output_tokens)} output tokens · ${num(r.sessions)} session${r.sessions === 1 ? "" : "s"}${cache}</div>
             <div class="efforts">${effortMix(r)}</div>
@@ -408,11 +464,15 @@
         ]);
         renderKpis(summary, skills);
         renderComparison(comparison);
-        $("#costPanel").style.display = harness === "copilot-cli" ? "none" : "";
         renderCost(cost);
         renderShelf(skills);
         renderPrompts(prompts);
-        hbars("#projects", projects.slice(0, 6).map((r) => [r.key, r.cost_usd]), money, "No spend in this period.");
+        const projectValue = (r) => r.cost_usd + aiCreditUsd(r.ai_units ?? 0);
+        $("#projectTitle").textContent = harness === "copilot-cli" ? "Copilot value by project" : "Billing value by project";
+        $("#projectNote").textContent = harness === "copilot-cli"
+          ? "Approximate USD overage value at 1 AI credit = $0.01."
+          : "Claude estimated cost plus Copilot's approximate USD overage value.";
+        hbars("#projects", projects.slice(0, 6).map((r) => [r.key, projectValue(r)]), harness === "claude-code" ? money : (v) => `~${money(v)}`, "No billing usage in this period.");
         renderFriction(friction);
         renderModels(models);
       } catch (e) {
@@ -439,13 +499,13 @@
               const right = a.kind === "request" && a.tokens != null ? `${tok(a.tokens)} out` : "";
               const where = a.project ? `in ${esc(a.project)}` : "";
               const provider = LIVE_HARNESS[a.harness] ?? a.harness;
-              return `<li class="${isNew ? "new" : ""}" title="${where}"><span class="t">${t}</span><span class="l"><span class="k">${esc(provider)}</span> <span class="k">${LIVE_LABEL[a.kind] ?? esc(a.kind)}</span> ${esc(a.label)}</span><span class="ms">${right}</span></li>`;
+              return `<li class="${isNew ? "new" : ""}" title="${where}"><span class="t">${t}</span><span class="l"><span class="provider-badge ${esc(a.harness)}">${esc(provider)}</span> <span class="k">${LIVE_LABEL[a.kind] ?? esc(a.kind)}</span> ${esc(a.label)}</span><span class="ms">${right}</span></li>`;
             }).join("")
           : `<li><span class="empty">No activity yet.</span></li>`;
         const sync = status.last_sync;
         const synced = sync ? new Date(sync.at).toLocaleTimeString() : "not yet";
         const syncErr = sync?.error ? ` · <span class="error">sync error: ${esc(sync.error)}</span>` : "";
-        $("#footer").innerHTML = `calvin ${esc(status.version)} · data from your local Claude Code logs, kept on this machine · last synced ${synced}${syncErr}`;
+        $("#footer").innerHTML = `calvin ${esc(status.version)} · data from your local Claude Code and Copilot CLI logs, kept on this machine · last synced ${synced}${syncErr}`;
         renderUpdate(status.update);
         if (sync && sync.lines > 0 && !first) load();
       } catch (e) {
@@ -487,15 +547,13 @@
       const r = document.documentElement;
       r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
       localStorage.setItem("calvin-theme", r.dataset.theme);
+      load();
     };
     const fullscreen = () => (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen());
 
     document.documentElement.dataset.theme = localStorage.getItem("calvin-theme") ?? "dark";
     document.querySelectorAll("#range button").forEach((b) => b.addEventListener("click", () => setRange(+b.dataset.days)));
-    document.querySelectorAll("#harness button").forEach((b) => b.addEventListener("click", () => {
-      document.querySelectorAll("#harness button").forEach((x) => x.classList.toggle("active", x === b));
-      load();
-    }));
+    $("#harness").onchange = load;
     $("#pause").addEventListener("click", togglePause);
     $("#theme").addEventListener("click", toggleTheme);
     $("#fs").addEventListener("click", fullscreen);

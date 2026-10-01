@@ -156,7 +156,7 @@ extra_paths = ["~/other/skills"]  # more places where skills are installed
 check = true                      # once a day, ask GitHub whether a newer calvin exists
 
 [advisor]                         # who writes plans on the Opportunities page
-provider = "claude-code"          # or "command"
+provider = "claude-code"          # "claude-code", "copilot-cli", or "command"
 
 [advisor.claude-code]
 program = "claude"
@@ -164,6 +164,11 @@ model = "claude-sonnet-5"
 max_budget_usd = 1.0              # spending cap per plan
 research = true                   # let it read the official docs (web fetch and search only)
 docs_index = "https://code.claude.com/docs/llms.txt"
+
+[advisor.copilot-cli]
+program = "copilot"
+model = "auto"
+max_ai_credits = 50               # guardrail per plan (Copilot minimum is 30)
 
 [advisor.command]                 # any tool: prompt on stdin, Markdown on stdout
 name = "My tool"                  # shown on the button

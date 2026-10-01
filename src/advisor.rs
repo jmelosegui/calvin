@@ -16,7 +16,9 @@ use rusqlite::params;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::config::{AdvisorConfig, ClaudeCodeAdvisor, CommandAdvisor, find_program};
+use crate::config::{
+    AdvisorConfig, ClaudeCodeAdvisor, CommandAdvisor, CopilotCliAdvisor, find_program,
+};
 use crate::insights::{ModelRow, Summary};
 use crate::opportunities::{Opportunity, Status};
 use crate::skills::InstalledSkill;
@@ -31,8 +33,11 @@ Structure:\n\
 2. **Drafts**: ready-to-use text for those changes, such as a CLAUDE.md starter for a named project, a rewritten skill description, a settings.json snippet, or a new skill outline. Base drafts on the evidence given; mark anything you had to assume.\n\
 3. **Advanced features you don't use yet**: group this section by coding tool and teach capabilities the developer has never touched. Do not repeat \
 anything already covered by calvin's findings above (CLAUDE.md, subagent model, MCP servers, skills, shared settings, log \
-retention and so on are handled there). If an official documentation index is given, fetch it first and read the pages you \
-need, so the list reflects the current version, not your memory. Compare the section \"How you use ... today\" with that \
+retention and so on are handled there). The report contains a \"Required official documentation sources\" section. When web \
+research tools are available, before writing this section fetch at least one listed source for every coding tool represented \
+in the report; checking only the advisor tool's documentation is not sufficient. If research tools are unavailable, say that \
+current features could not be independently verified. Read the pages you need so the list reflects the current version, not \
+your memory. Compare the section \"How you use ... today\" with that \
 feature set and pick 6 to 10 advanced features they don't use, for example hook events they haven't configured, remote \
 control, cloud sessions, headless and scripted runs, CI integration, scheduled routines, agent teams, output styles, \
 checkpoints and rewind, and anything else the tool offers. For each: what it is, exactly how to start (command, setting or \
@@ -90,6 +95,8 @@ impl Job {
 pub enum Provider {
     /// Claude Code (`claude -p`): streams progress, reports cost, honours a spending cap.
     ClaudeCode(ClaudeCodeAdvisor),
+    /// GitHub Copilot CLI in non-interactive, web-research-only mode.
+    CopilotCli(CopilotCliAdvisor),
     /// Any command that reads the prompt on stdin and writes Markdown to stdout.
     Command(CommandAdvisor),
 }
@@ -109,6 +116,7 @@ impl Provider {
     pub fn from_config(cfg: &AdvisorConfig) -> Result<Provider> {
         match cfg.provider.as_str() {
             "claude-code" => Ok(Provider::ClaudeCode(cfg.claude_code.clone())),
+            "copilot-cli" => Ok(Provider::CopilotCli(cfg.copilot_cli.clone())),
             "command" if !cfg.command.program.trim().is_empty() => {
                 Ok(Provider::Command(cfg.command.clone()))
             }
@@ -120,6 +128,7 @@ impl Provider {
     pub fn name(&self) -> String {
         match self {
             Provider::ClaudeCode(_) => "Claude Code".into(),
+            Provider::CopilotCli(_) => "GitHub Copilot CLI".into(),
             Provider::Command(c) if !c.name.trim().is_empty() => c.name.trim().to_string(),
             Provider::Command(c) => c.program.clone(),
         }
@@ -137,6 +146,16 @@ pub fn providers(cfg: &AdvisorConfig) -> Vec<ProviderInfo> {
             available: find_program(&cc.program).is_some(),
             detail: format!("{} · up to ${:.2} per run", cc.model, cc.max_budget_usd),
             selected: cfg.provider == "claude-code",
+        },
+        ProviderInfo {
+            id: "copilot-cli",
+            name: "GitHub Copilot CLI".into(),
+            available: find_program(&cfg.copilot_cli.program).is_some(),
+            detail: format!(
+                "{} · up to {} AI credits per run",
+                cfg.copilot_cli.model, cfg.copilot_cli.max_ai_credits
+            ),
+            selected: cfg.provider == "copilot-cli",
         },
         ProviderInfo {
             id: "command",
@@ -275,6 +294,7 @@ pub fn start(
         let started = Instant::now();
         let outcome = match &provider {
             Provider::ClaudeCode(settings) => run_claude_code(&job, settings, &prompt),
+            Provider::CopilotCli(settings) => run_copilot_cli(&job, settings, &prompt),
             Provider::Command(settings) => run_command(&job, settings, &prompt),
         };
         let mut j = job.lock().unwrap();
@@ -381,6 +401,99 @@ fn run_command(job: &Arc<Mutex<Job>>, settings: &CommandAdvisor, prompt: &str) -
         });
     } else if j.text.trim().is_empty() {
         j.error = Some("the advisor returned nothing".into());
+    }
+    Ok(())
+}
+
+/// GitHub Copilot CLI in an empty working directory with only web research tools exposed.
+fn run_copilot_cli(
+    job: &Arc<Mutex<Job>>,
+    settings: &CopilotCliAdvisor,
+    prompt: &str,
+) -> Result<()> {
+    let credits = settings.max_ai_credits.max(30).to_string();
+    let mut cmd = Command::new(&settings.program);
+    cmd.current_dir(workdir()?)
+        .args([
+            "--silent",
+            "--output-format",
+            "text",
+            "--allow-all-tools",
+            "--allow-all-urls",
+            "--available-tools",
+            "web_search",
+            "web_fetch",
+            "--disable-builtin-mcps",
+            "--no-custom-instructions",
+            "--no-ask-user",
+            "--no-auto-update",
+            "--no-remote",
+            "--max-ai-credits",
+            &credits,
+        ])
+        .args(
+            (!settings.model.trim().is_empty())
+                .then_some(["--model", settings.model.as_str()])
+                .into_iter()
+                .flatten(),
+        )
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    no_window(&mut cmd);
+    let mut child = cmd.spawn().with_context(|| {
+        format!(
+            "couldn't start `{}`. Is GitHub Copilot CLI installed and on your PATH?",
+            settings.program
+        )
+    })?;
+    let input = format!("{SYSTEM_PROMPT}\n\n---\n\n{prompt}");
+    child
+        .stdin
+        .take()
+        .context("no stdin")?
+        .write_all(input.as_bytes())?;
+    {
+        let mut j = job.lock().unwrap();
+        j.model = Some(settings.model.clone());
+        j.step(&format!("GitHub Copilot CLI is ready ({})", settings.model));
+        j.step("Sending the report");
+        j.step("Researching the required docs");
+    }
+    let stderr = child.stderr.take();
+    let stderr_text = std::thread::spawn(move || {
+        let mut s = String::new();
+        if let Some(mut e) = stderr {
+            let _ = std::io::Read::read_to_string(&mut e, &mut s);
+        }
+        s
+    });
+    let deadline = Instant::now() + TIMEOUT;
+    for line in BufReader::new(child.stdout.take().context("no stdout")?).lines() {
+        let line = line?;
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            bail!(
+                "GitHub Copilot CLI took longer than {} minutes",
+                TIMEOUT.as_secs() / 60
+            );
+        }
+        let mut j = job.lock().unwrap();
+        j.step("Writing the plan");
+        j.text.push_str(&line);
+        j.text.push('\n');
+    }
+    let status = child.wait()?;
+    let err = stderr_text.join().unwrap_or_default();
+    let mut j = job.lock().unwrap();
+    if !status.success() {
+        j.error = Some(if err.trim().is_empty() {
+            format!("{} exited with {status}", settings.program)
+        } else {
+            err.trim().to_string()
+        });
+    } else if j.text.trim().is_empty() {
+        j.error = Some("GitHub Copilot CLI returned nothing".into());
     }
     Ok(())
 }
@@ -596,6 +709,11 @@ mod tests {
             Provider::from_config(&cfg).unwrap(),
             Provider::ClaudeCode(_)
         ));
+        cfg.provider = "copilot-cli".into();
+        assert!(matches!(
+            Provider::from_config(&cfg).unwrap(),
+            Provider::CopilotCli(_)
+        ));
         cfg.provider = "command".into();
         assert!(
             Provider::from_config(&cfg).is_err(),
@@ -607,6 +725,7 @@ mod tests {
         cfg.provider = "nope".into();
         assert!(Provider::from_config(&cfg).is_err());
         let listed = providers(&AdvisorConfig::default());
+        assert!(listed.iter().any(|provider| provider.id == "copilot-cli"));
         assert_eq!(listed.iter().filter(|p| p.selected).count(), 1);
     }
 

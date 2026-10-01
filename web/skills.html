@@ -90,11 +90,13 @@
     <h1>Skill <span class="px">LIBRARY</span></h1>
     <div class="actions">
       <input class="search" id="q" type="search" placeholder="Search skills  ( / )" autocomplete="off" />
-      <div class="seg" id="provider-filter">
-        <button data-provider="" class="active">All CLIs</button>
-        <button data-provider="claude-code">Claude Code</button>
-        <button data-provider="copilot-cli">Copilot CLI</button>
-      </div>
+      <label class="cli-picker">CLI
+        <select id="provider-filter">
+          <option value="">All tools</option>
+          <option value="claude-code">Claude Code</option>
+          <option value="copilot-cli">Copilot CLI</option>
+        </select>
+      </label>
       <div class="seg" id="source">
         <button data-source="" class="active">All</button>
         <button data-source="global">Global</button>
@@ -144,7 +146,9 @@
 
     const KIND = { global: "global", project: "project", plugin: "plugin" };
     const PROVIDER = { "claude-code": "Claude Code", "copilot-cli": "Copilot CLI" };
-    const providerLabel = (s) => s.providers?.map((p) => PROVIDER[p] ?? p).join(" + ") || "usage only";
+    const providerBadges = (s) => s.providers?.length
+      ? s.providers.map((p) => `<span class="provider-badge ${esc(p)}">${esc(PROVIDER[p] ?? p)}</span>`).join(" ")
+      : `<span class="provider-badge">usage only</span>`;
 
     function renderList() {
       const q = $("#q").value.trim().toLowerCase();
@@ -159,7 +163,7 @@
               const n = s.model_runs + s.command_runs;
               return `<div class="row ${s.name === current ? "current" : ""}" data-name="${esc(s.name)}">
                 <input type="checkbox" ${selected.has(s.name) ? "checked" : ""} aria-label="Select ${esc(s.name)}" />
-                <div><div class="nm">${esc(s.name)}<small>${KIND[s.kind] ?? esc(s.kind)} · ${esc(providerLabel(s))}</small></div><div class="desc">${esc(s.description)}</div></div>
+                <div><div class="nm">${esc(s.name)}<small>${KIND[s.kind] ?? esc(s.kind)} · ${providerBadges(s)}</small></div><div class="desc">${esc(s.description)}</div></div>
                 <span class="uses ${n ? "" : "zero"}" title="model ran it ${s.model_runs}× · you ran it ${s.command_runs}×">${n}</span>
                 <span class="last">${day(s.last_used)}</span>
               </div>`;
@@ -193,7 +197,7 @@
           : "";
         box.innerHTML = `
           <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-            <h2 style="margin:0">${esc(d.skill.name)}</h2><span class="badge">${KIND[d.skill.kind] ?? esc(d.skill.kind)}</span><span class="badge">${esc(providerLabel(d.skill))}</span>
+            <h2 style="margin:0">${esc(d.skill.name)}</h2><span class="badge">${KIND[d.skill.kind] ?? esc(d.skill.kind)}</span>${providerBadges(d.skill)}
             <button class="btn" id="openfolder" style="margin-left:auto" title="Open in your file manager">Open folder</button>
             <button class="btn primary" id="packone">Pack this skill</button>
           </div>
@@ -304,12 +308,10 @@
         document.querySelectorAll("#source button").forEach((x) => x.classList.toggle("active", x === b));
         renderList();
       }));
-    document.querySelectorAll("#provider-filter button").forEach((b) =>
-      b.addEventListener("click", () => {
-        provider = b.dataset.provider;
-        document.querySelectorAll("#provider-filter button").forEach((x) => x.classList.toggle("active", x === b));
-        renderList();
-      }));
+    $("#provider-filter").onchange = (event) => {
+      provider = event.target.value;
+      renderList();
+    };
     $("#pack").onclick = () => pack([...selected]);
     $("#clear").onclick = () => {
       selected.clear();
