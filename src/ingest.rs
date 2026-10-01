@@ -11,7 +11,7 @@ use std::time::UNIX_EPOCH;
 
 use anyhow::{Context, Result};
 use rusqlite::types::Value as SqlValue;
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde_json::Value;
 use walkdir::WalkDir;
 
@@ -111,7 +111,7 @@ pub fn ingest_claude_code(
             }
             stats.files_seen += 1;
             if todo > 0 {
-                let tx = conn.transaction()?;
+                let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
                 if ingest_file(&tx, &path, &mut stats)
                     .with_context(|| format!("ingesting {}", path.display()))?
                 {
@@ -170,7 +170,7 @@ pub fn ingest_copilot_cli(
         }
         stats.files_seen += 1;
         if todo > 0 {
-            let tx = conn.transaction()?;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             if ingest_copilot_event_file(&tx, &path, &mut stats)? {
                 stats.files_read += 1;
             }
@@ -240,7 +240,7 @@ pub fn ingest_cursor(
     }
     let workspaces = cursor_workspaces(state_db);
     let mut max_updated = checkpoint;
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     for composer in composers {
         if progress.should_stop() {
             break;
@@ -499,7 +499,7 @@ fn import_copilot_store(conn: &mut Connection, path: &Path) -> Result<()> {
     let source = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
         .with_context(|| format!("opening {}", path.display()))?;
     source.busy_timeout(std::time::Duration::from_secs(5))?;
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
     {
         let mut rows = source.prepare(
