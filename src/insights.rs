@@ -207,8 +207,10 @@ pub fn cost(conn: &Connection, since: &Since, by: CostBy) -> Result<Vec<CostRow>
     };
     let sql = format!(
         "SELECT {key} AS key, COUNT(DISTINCT r.session_id), COUNT(*),
-                SUM(r.input_tokens), SUM(r.output_tokens), SUM(r.cache_read),
-                SUM(r.cache_write_5m + r.cache_write_1h), COALESCE(SUM(r.cost_usd), 0) AS cost,
+                COALESCE(SUM(r.input_tokens), 0), COALESCE(SUM(r.output_tokens), 0),
+                COALESCE(SUM(r.cache_read), 0),
+                COALESCE(SUM(r.cache_write_5m + r.cache_write_1h), 0),
+                COALESCE(SUM(r.cost_usd), 0) AS cost,
                 COALESCE(SUM(r.ai_units), 0) AS ai_units
          FROM requests r LEFT JOIN sessions s ON s.id = r.session_id
          WHERE r.ts >= ?1 GROUP BY key ORDER BY {order}"

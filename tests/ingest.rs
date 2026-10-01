@@ -71,6 +71,26 @@ fn resumed_sessions_are_recent_activity() {
 }
 
 #[test]
+fn cost_groups_tolerate_unavailable_tokens() {
+    let conn = db::open_in_memory().unwrap();
+    conn.execute_batch(
+        "INSERT INTO sessions (id, harness, started_at, ended_at)
+         VALUES ('cursor:missing-usage', 'cursor',
+                 '2026-10-01T10:00:00Z', '2026-10-01T10:01:00Z');
+         INSERT INTO requests
+             (request_id, session_id, ts, model, input_tokens, output_tokens, is_sidechain)
+         VALUES ('cursor:missing-request', 'cursor:missing-usage',
+                 '2026-10-01T10:00:30Z', 'default', NULL, NULL, 0);",
+    )
+    .unwrap();
+    let rows = insights::cost(&conn, &Since::all(), CostBy::Day).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].requests, 1);
+    assert_eq!(rows[0].input_tokens, 0);
+    assert_eq!(rows[0].output_tokens, 0);
+}
+
+#[test]
 fn imports_cursor_sqlite_sessions_and_timeline() {
     let tmp = tempfile::tempdir().unwrap();
     let user_dir = tmp.path().join("Cursor/User");
