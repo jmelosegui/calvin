@@ -210,8 +210,7 @@ fn copilot_inventory_and_recommendations_use_provider_evidence() {
     )
     .unwrap();
 
-    let inventory =
-        calvin::inventory::copilot_markdown(&conn, &Since::all(), &copilot).unwrap();
+    let inventory = calvin::inventory::copilot_markdown(&conn, &Since::all(), &copilot).unwrap();
     assert!(inventory.contains("Modes entered: plan (1)"));
     assert!(inventory.contains("MCP servers configured (names only): github"));
     assert!(inventory.contains("Permission locations configured: 1"));
@@ -220,6 +219,7 @@ fn copilot_inventory_and_recommendations_use_provider_evidence() {
     let prices = PriceTable::bundled();
     let ctx = calvin::opportunities::Context {
         claude_dir: tmp.path(),
+        copilot_dir: &copilot,
         prices: &prices,
         skills: &[],
     };
@@ -229,6 +229,24 @@ fn copilot_inventory_and_recommendations_use_provider_evidence() {
     assert!(ids.contains(&"copilot-compact"));
     assert!(ids.contains(&"copilot-review"));
     assert!(ids.contains(&"copilot-autopilot"));
+    for feature in [
+        "copilot-hooks",
+        "copilot-status-line",
+        "copilot-command-history",
+        "copilot-subagents",
+        "copilot-worktrees",
+        "copilot-notifications",
+        "copilot-keep-alive",
+        "copilot-memory",
+        "copilot-extensions",
+        "copilot-handoff",
+        "copilot-context-controls",
+        "copilot-prompt-tools",
+        "copilot-development-integrations",
+        "copilot-session-navigation",
+    ] {
+        assert!(ids.contains(&feature), "missing {feature}");
+    }
     assert_eq!(
         found
             .iter()
@@ -236,6 +254,14 @@ fn copilot_inventory_and_recommendations_use_provider_evidence() {
             .unwrap()
             .status,
         calvin::opportunities::Status::Consider
+    );
+    assert_eq!(
+        found
+            .iter()
+            .find(|opportunity| opportunity.id == "copilot-extensions")
+            .unwrap()
+            .status,
+        calvin::opportunities::Status::Good
     );
 }
 
@@ -482,6 +508,7 @@ fn opportunities_run_on_the_fixture() {
     let prices = PriceTable::bundled();
     let ctx = calvin::opportunities::Context {
         claude_dir: &claude,
+        copilot_dir: tmp.path(),
         prices: &prices,
         skills: &[],
     };

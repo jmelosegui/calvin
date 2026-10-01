@@ -731,6 +731,7 @@ fn compute_opportunities(
     let skills = installed_skills(st, c)?;
     let ctx = crate::opportunities::Context {
         claude_dir: &st.claude_dir,
+        copilot_dir: &st.copilot_dir,
         prices: &st.prices,
         skills: &skills,
     };

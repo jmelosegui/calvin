@@ -36,7 +36,7 @@ and unknown event types or fields are ignored.
 ## Tailored recommendations
 
 Copilot recommendations use Copilot-only evidence and never compare AI units with Claude
-Code's estimated USD cost. Calvin currently checks for:
+Code's estimated USD cost. Calvin includes two kinds of deterministic checks:
 
 - substantial multi-file or tool-heavy sessions that did not use `/plan`;
 - long or high-context sessions that did not use `/compact`;
@@ -44,7 +44,16 @@ Code's estimated USD cost. Calvin currently checks for:
   `/rubber-duck`;
 - bounded prompts repeated across multiple sessions that may suit `/autopilot` with an
   explicit AI-credit limit.
+- a feature checklist covering hooks, status lines, command-history size, subagents and
+  fleet mode, worktrees, notifications, keep-alive, memory, extensions, remote sessions
+  and delegation, context and credit controls, prompt refinement and research, IDE/LSP
+  integration, and session navigation. Features remain visible as "in place" after Calvin
+  detects their configuration or use.
 
 The advisor inventory also reports Copilot models, modes, slash commands, settings keys,
 configured and observed MCP server names, permission-location counts, plugins, agents and
 skills. Configuration values, tokens and MCP credentials are never included.
+
+The Opportunities page is complete without running the AI advisor. The advisor is an
+optional second step that prioritizes the deterministic findings, connects patterns and
+drafts changes; it does not unlock hidden recommendations.
