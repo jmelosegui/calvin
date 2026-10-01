@@ -211,7 +211,8 @@ impl Config {
         if let Some(path) = std::env::var_os("CURSOR_STATE_DB") {
             return Ok(PathBuf::from(path));
         }
-        let base = BaseDirs::new().ok_or_else(|| anyhow!("could not determine config directory"))?;
+        let base =
+            BaseDirs::new().ok_or_else(|| anyhow!("could not determine config directory"))?;
         Ok(base
             .config_dir()
             .join("Cursor")

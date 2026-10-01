@@ -138,13 +138,7 @@ fn imports_cursor_sqlite_sessions_and_timeline() {
     .unwrap();
 
     let mut conn = db::open_in_memory().unwrap();
-    let stats = ingest_cursor(
-        &mut conn,
-        &state_db,
-        &PriceTable::bundled(),
-        &mut Quiet,
-    )
-    .unwrap();
+    let stats = ingest_cursor(&mut conn, &state_db, &PriceTable::bundled(), &mut Quiet).unwrap();
     assert_eq!(stats.files_read, 1);
     assert_eq!(count(&conn, "SELECT COUNT(*) FROM sessions"), 1);
     assert_eq!(
@@ -177,7 +171,13 @@ fn imports_cursor_sqlite_sessions_and_timeline() {
         .unwrap(),
         120
     );
-    assert_eq!(count(&conn, "SELECT COUNT(*) FROM tool_calls WHERE outcome = 'ok'"), 1);
+    assert_eq!(
+        count(
+            &conn,
+            "SELECT COUNT(*) FROM tool_calls WHERE outcome = 'ok'"
+        ),
+        1
+    );
     assert_eq!(count(&conn, "SELECT COUNT(*) FROM session_files"), 1);
     assert_eq!(count(&conn, "SELECT COUNT(*) FROM session_modes"), 1);
 
@@ -188,13 +188,8 @@ fn imports_cursor_sqlite_sessions_and_timeline() {
     assert_eq!(session.turns[0].tool_calls, 1);
     assert_eq!(session.turns[0].items.len(), 2);
 
-    let unchanged = ingest_cursor(
-        &mut conn,
-        &state_db,
-        &PriceTable::bundled(),
-        &mut Quiet,
-    )
-    .unwrap();
+    let unchanged =
+        ingest_cursor(&mut conn, &state_db, &PriceTable::bundled(), &mut Quiet).unwrap();
     assert_eq!(unchanged.files_read, 0);
     assert_eq!(count(&conn, "SELECT COUNT(*) FROM requests"), 1);
 }
