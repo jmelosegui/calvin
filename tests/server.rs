@@ -217,6 +217,7 @@ async fn sessions_list_and_timeline() {
     assert_eq!(list.as_array().unwrap().len(), 1);
     assert_eq!(list[0]["title"], "Fix failing tests");
     assert_eq!(list[0]["friction"], 3);
+    assert_eq!(list[0]["cwd"], r"C:\work\demo");
 
     let id = list[0]["id"].as_str().unwrap();
     let res = app

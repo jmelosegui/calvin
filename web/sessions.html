@@ -43,6 +43,7 @@
       display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
     .sessions .proj { color: var(--muted); font-size: 13px; white-space: nowrap; }
     .sessions .proj small { display: block; color: var(--faint); font-size: 12px; }
+    .sessions .proj .path { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
     .friction { color: var(--orange-ink); }
 
     /* ---------- detail ---------- */
@@ -239,7 +240,7 @@
         .filter((s) => !project || s.project === project)
         .filter((s) => !harness || s.harness === harness)
         .filter((s) => !$("#onlyfriction").checked || s.friction > 0)
-        .filter((s) => !q || [s.title, s.first_prompt, s.project, s.git_branch].some((v) => v && v.toLowerCase().includes(q)));
+        .filter((s) => !q || [s.title, s.first_prompt, s.project, s.cwd, s.git_branch].some((v) => v && v.toLowerCase().includes(q)));
       if (!rows.length) {
         $("#list").innerHTML = `<div class="empty">No sessions match.</div>`;
         return;
@@ -250,12 +251,12 @@
       $("#list").innerHTML = `
         <p class="sub">${rows.length} session${rows.length === 1 ? "" : "s"}${usage ? ` · ${usage}` : ""}. Click one to read it.</p>
         <table class="sessions">
-          <thead><tr><th>When</th><th>Session</th><th>Project</th><th class="num">Prompts</th><th class="num">Tools</th><th class="num">Friction</th><th class="num">Length</th><th class="num">Usage</th></tr></thead>
+          <thead><tr><th>When</th><th>Session</th><th>Project / directory</th><th class="num">Prompts</th><th class="num">Tools</th><th class="num">Friction</th><th class="num">Length</th><th class="num">Usage</th></tr></thead>
           <tbody>${rows.map((s) => `
             <tr class="row" data-id="${esc(s.id)}">
               <td class="when">${when(s.started_at)}</td>
               <td><div class="title">${esc(s.title || s.first_prompt || "(untitled)")}<span class="provider ${esc(s.harness)}">${esc(harnessName(s.harness))}</span></div>${s.title && s.first_prompt ? `<div class="first">${esc(s.first_prompt)}</div>` : ""}</td>
-              <td class="proj">${esc(s.project ?? "")}${s.git_branch ? `<small>${esc(s.git_branch)}</small>` : ""}</td>
+              <td class="proj">${esc(s.project ?? "")}${s.cwd ? `<small class="path" title="${esc(s.cwd)}">${esc(s.cwd)}</small>` : ""}${s.git_branch ? `<small>${esc(s.git_branch)}</small>` : ""}</td>
               <td class="num">${s.prompts}</td>
               <td class="num">${s.tool_calls}</td>
               <td class="num ${s.friction ? "friction" : "zero"}">${s.friction ? `<a href="#${encodeURIComponent(s.id)}?friction" class="jump" title="Open at the first friction point">${s.friction}</a>` : 0}</td>
@@ -274,8 +275,9 @@
     const CHECK_ICON = `<svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>`;
 
     function resumeCommand(s) {
-      if (s.harness === "copilot-cli") return `/resume ${s.id.replace(/^copilot-cli:/, "")}`;
-      const resume = `claude --resume ${s.id}`;
+      const resume = s.harness === "copilot-cli"
+        ? `copilot --resume=${s.id.replace(/^copilot-cli:/, "")}`
+        : `claude --resume ${s.id}`;
       if (!s.cwd) return resume;
       if (/^[A-Za-z]:[\\/]/.test(s.cwd) || s.cwd.startsWith("\\\\")) {
         return `cd '${s.cwd.replace(/'/g, "''")}'; ${resume}`; // PowerShell
@@ -417,7 +419,7 @@
             <div><b>${dur(span(s.started_at, s.ended_at)) || "–"}</b><span>from first to last message</span></div>
             <div><b>${s.harness === "copilot-cli" ? `${s.ai_units.toFixed(2)} AIU` : money(s.cost_usd)}</b><span>${s.harness === "copilot-cli" ? "reported by Copilot CLI" : `at API list price${s.subagent_cost_usd ? `, ${money(s.subagent_cost_usd)} of it in subagents` : ""}`}</span></div>
           </div>
-          <div class="resume" title="${s.harness === "copilot-cli" ? "Paste into Copilot CLI" : "Paste into a terminal to resume in Claude Code"}">
+          <div class="resume" title="Paste into a terminal to resume in ${s.harness === "copilot-cli" ? "Copilot CLI" : "Claude Code"}">
             <span class="lbl">Resume</span><code id="resumecmd">${esc(resumeCommand(s))}</code>
             <button class="copy" id="copyresume" title="Copy command" aria-label="Copy command">${COPY_ICON}</button>
           </div>
