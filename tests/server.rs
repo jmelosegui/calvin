@@ -125,6 +125,34 @@ async fn summary_is_json_from_the_database() {
 }
 
 #[tokio::test]
+async fn advisor_preview_requires_docs_for_every_harness() {
+    let (tmp, app) = app();
+    let conn = db::open(&tmp.path().join("calvin.db")).unwrap();
+    conn.execute(
+        "INSERT INTO sessions (id, harness, started_at)
+         VALUES ('copilot-cli:test', 'copilot-cli', '2026-09-30T12:00:00Z')",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    let res = app
+        .oneshot(get("/api/advisor/preview?since=all", "127.0.0.1:1982"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let prompt = v["prompt"].as_str().unwrap();
+    assert!(prompt.contains("## Required official documentation sources"));
+    assert!(prompt.contains("https://code.claude.com/docs/llms.txt"));
+    assert!(prompt.contains("https://docs.github.com/en/copilot/how-tos/copilot-cli"));
+    assert!(prompt.contains(
+        "https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference"
+    ));
+}
+
+#[tokio::test]
 async fn pack_only_accepts_installed_skill_names() {
     let (_tmp, app) = app();
     for path in [

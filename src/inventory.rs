@@ -414,7 +414,7 @@ pub fn copilot_markdown(conn: &Connection, since: &Since, copilot_dir: &Path) ->
         }
     ));
     out.push_str(
-        "- Official documentation: https://docs.github.com/copilot/how-tos/use-copilot-agents/use-copilot-cli\n",
+        "- Official documentation: https://docs.github.com/en/copilot/how-tos/copilot-cli\n",
     );
     Ok(out)
 }

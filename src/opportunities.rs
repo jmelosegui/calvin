@@ -440,7 +440,7 @@ fn copilot_plan_mode(conn: &Connection, since: &Since) -> Result<Opportunity> {
     }
     Ok(Opportunity {
                 id: "copilot-plan-mode",
-                area: "Copilot CLI",
+                area: "Workflow",
                 status: if missed.is_empty() {
                     Status::Good
                 } else {
@@ -511,7 +511,7 @@ fn copilot_compact(conn: &Connection, since: &Since) -> Result<Opportunity> {
     }
     Ok(Opportunity {
                 id: "copilot-compact",
-                area: "Copilot CLI",
+                area: "Context",
                 status: if missed.is_empty() {
                     Status::Good
                 } else {
@@ -583,7 +583,7 @@ fn copilot_review(conn: &Connection, since: &Since) -> Result<Opportunity> {
     }
     Ok(Opportunity {
                 id: "copilot-review",
-                area: "Copilot CLI",
+                area: "Quality",
                 status: if missed.is_empty() {
                     Status::Good
                 } else {
@@ -651,7 +651,7 @@ fn copilot_autopilot(conn: &Connection, since: &Since) -> Result<Opportunity> {
     }
     Ok(Opportunity {
                 id: "copilot-autopilot",
-                area: "Copilot CLI",
+                area: "Automation",
                 status: Status::Consider,
                 title: "Use bounded autopilot for repeated end-to-end tasks".into(),
                 finding: format!(
@@ -991,7 +991,18 @@ fn copilot_feature(
 ) -> Opportunity {
     Opportunity {
         id,
-        area: "Copilot CLI",
+        area: match id {
+            "copilot-hooks" => "Automation",
+            "copilot-status-line" | "copilot-notifications" | "copilot-keep-alive" => "Interface",
+            "copilot-command-history"
+            | "copilot-memory"
+            | "copilot-context-controls"
+            | "copilot-session-navigation" => "Context",
+            "copilot-subagents" | "copilot-extensions" => "Agents",
+            "copilot-worktrees" | "copilot-handoff" => "Workflow",
+            "copilot-prompt-tools" | "copilot-development-integrations" => "Quality",
+            _ => "Copilot CLI",
+        },
         status: if configured {
             Status::Good
         } else {
@@ -1028,7 +1039,7 @@ fn copilot_project_instructions_from_roots(roots: BTreeMap<PathBuf, ()>) -> Resu
         .collect();
     Ok(Opportunity {
         id: "copilot-project-instructions",
-        area: "Copilot CLI",
+        area: "Instructions",
         status: if missing.is_empty() {
             Status::Good
         } else {

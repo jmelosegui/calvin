@@ -28,10 +28,12 @@ pub struct Config {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AdvisorConfig {
-    /// `claude-code` or `command`.
+    /// `claude-code`, `copilot-cli` or `command`.
     pub provider: String,
     #[serde(rename = "claude-code")]
     pub claude_code: ClaudeCodeAdvisor,
+    #[serde(rename = "copilot-cli")]
+    pub copilot_cli: CopilotCliAdvisor,
     pub command: CommandAdvisor,
 }
 
@@ -40,6 +42,7 @@ impl Default for AdvisorConfig {
         Self {
             provider: "claude-code".into(),
             claude_code: ClaudeCodeAdvisor::default(),
+            copilot_cli: CopilotCliAdvisor::default(),
             command: CommandAdvisor::default(),
         }
     }
@@ -68,6 +71,26 @@ impl Default for ClaudeCodeAdvisor {
             max_budget_usd: 1.0,
             research: true,
             docs_index: "https://code.claude.com/docs/llms.txt".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct CopilotCliAdvisor {
+    /// The GitHub Copilot CLI executable.
+    pub program: String,
+    pub model: String,
+    /// AI-credit guardrail for one advisor run.
+    pub max_ai_credits: u64,
+}
+
+impl Default for CopilotCliAdvisor {
+    fn default() -> Self {
+        Self {
+            program: "copilot".into(),
+            model: "auto".into(),
+            max_ai_credits: 50,
         }
     }
 }
