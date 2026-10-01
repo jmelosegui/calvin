@@ -39,6 +39,7 @@
     }
     .provider.claude-code { border-color: var(--claude); color: var(--claude-ink); }
     .provider.copilot-cli { border-color: var(--copilot); color: var(--copilot-ink); }
+    .provider.cursor { border-color: var(--cursor); color: var(--cursor-ink); }
     .sessions .first { margin-top: 2px; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis;
       display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
     .sessions .proj { color: var(--muted); font-size: 13px; white-space: nowrap; }
@@ -148,7 +149,7 @@
 
   <div id="view"></div>
 
-  <footer id="footer">Conversations come from your local Claude Code and Copilot CLI history and never leave this machine.</footer>
+  <footer id="footer">Conversations come from your local Claude Code, Copilot CLI and Cursor history and never leave this machine.</footer>
 
   <script>
     const $ = (s) => document.querySelector(s);
@@ -193,7 +194,7 @@
     let range = "30d";
     let sessions = [];
     let harness = "";
-    const harnessName = (id) => id === "copilot-cli" ? "Copilot CLI" : "Claude Code";
+    const harnessName = (id) => id === "copilot-cli" ? "Copilot CLI" : id === "cursor" ? "Cursor" : "Claude Code";
 
     function listView() {
       document.title = "calvin · Sessions";
@@ -204,7 +205,7 @@
             <input class="search" id="q" type="search" placeholder="Search titles and prompts  ( / )" autocomplete="off" />
             <select id="project"><option value="">All projects</option></select>
             <label class="cli-picker">CLI
-              <select id="harness"><option value="">All tools</option><option value="claude-code">Claude Code</option><option value="copilot-cli">Copilot CLI</option></select>
+              <select id="harness"><option value="">All tools</option><option value="claude-code">Claude Code</option><option value="copilot-cli">Copilot CLI</option><option value="cursor">Cursor</option></select>
             </label>
             <label class="only"><input type="checkbox" id="onlyfriction" /> With friction only</label>
             <div class="seg" id="range">
@@ -247,7 +248,7 @@
       }
       const total = rows.reduce((t, s) => t + s.cost_usd, 0);
       const aiUnits = rows.reduce((t, s) => t + s.ai_units, 0);
-      const usage = [total ? `${money(total)} estimated Claude cost` : "", aiUnits ? `${aiUnits.toFixed(2)} Copilot AI units` : ""].filter(Boolean).join(" · ");
+      const usage = [total ? `${money(total)} estimated API-list-price value` : "", aiUnits ? `${aiUnits.toFixed(2)} Copilot AI units` : ""].filter(Boolean).join(" · ");
       $("#list").innerHTML = `
         <p class="sub">${rows.length} session${rows.length === 1 ? "" : "s"}${usage ? ` · ${usage}` : ""}. Click one to read it.</p>
         <table class="sessions">
@@ -277,6 +278,8 @@
     function resumeCommand(s) {
       const resume = s.harness === "copilot-cli"
         ? `copilot --resume=${s.id.replace(/^copilot-cli:/, "")}`
+        : s.harness === "cursor"
+          ? `agent --resume ${s.id.replace(/^cursor:/, "")}`
         : `claude --resume ${s.id}`;
       if (!s.cwd) return resume;
       if (/^[A-Za-z]:[\\/]/.test(s.cwd) || s.cwd.startsWith("\\\\")) {
@@ -417,9 +420,9 @@
             <div><b>${prompts}</b><span>prompts</span></div>
             <div><b>${toolCount}</b><span>tool calls</span></div>
             <div><b>${dur(span(s.started_at, s.ended_at)) || "–"}</b><span>from first to last message</span></div>
-            <div><b>${s.harness === "copilot-cli" ? `${s.ai_units.toFixed(2)} AIU` : money(s.cost_usd)}</b><span>${s.harness === "copilot-cli" ? "reported by Copilot CLI" : `at API list price${s.subagent_cost_usd ? `, ${money(s.subagent_cost_usd)} of it in subagents` : ""}`}</span></div>
+            <div><b>${s.harness === "copilot-cli" ? `${s.ai_units.toFixed(2)} AIU` : money(s.cost_usd)}</b><span>${s.harness === "copilot-cli" ? "reported by Copilot CLI" : s.harness === "cursor" ? "recorded tokens at API list price; not your Cursor bill" : `at API list price${s.subagent_cost_usd ? `, ${money(s.subagent_cost_usd)} of it in subagents` : ""}`}</span></div>
           </div>
-          <div class="resume" title="Paste into a terminal to resume in ${s.harness === "copilot-cli" ? "Copilot CLI" : "Claude Code"}">
+          <div class="resume" title="Paste into a terminal to resume in ${harnessName(s.harness)}">
             <span class="lbl">Resume</span><code id="resumecmd">${esc(resumeCommand(s))}</code>
             <button class="copy" id="copyresume" title="Copy command" aria-label="Copy command">${COPY_ICON}</button>
           </div>
