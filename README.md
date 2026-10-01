@@ -13,8 +13,9 @@ loads them into a local SQLite database, and shows you:
 
 - **Prompts you keep typing**, which should become skills or `CLAUDE.md` rules
 - **Skills that never trigger**, and prompts a skill should have caught
-- **Billing value and cache hit rate** per day, project and model, keeping API-list-price
-  estimates and Copilot AI credits explicit
+- **Billing value and cache hit rate** per day, project and model, on one comparable USD
+  axis: Claude and Cursor tokens priced at API list price, Copilot AI credits converted at
+  $0.01 each. Each tool's basis stays labelled, because none of them is your actual bill
 - **Friction**: denied tool calls, interruptions, "no, that's wrong" replies
 - **Opportunities**: Claude Code, Copilot CLI and Cursor features and habits you could be using and aren't
 
@@ -26,7 +27,9 @@ loads them into a local SQLite database, and shows you:
 ## The dashboard
 
 - **Prime Radiant**: the overview. Sessions, prompts, estimated cost, cache hit rate and
-  skills used for the last 7, 30 or 90 days; spend per day and per project; a live feed of
+  skills used for the last 7, 30 or 90 days; **CLI mix and behavior**, which compares your
+  tools side by side on session share and on the rates they have in common; spend per day
+  and per project; a live feed of
   activity across your sessions; a skill shelf; prompts you keep typing; friction; and
   which models did the work and at what effort. Keys: `space` pauses the live feed, `F` is
   full screen, `T` switches light and dark, and `1` `2` `3` pick the period.
@@ -119,11 +122,11 @@ calvin doctor                  # what was detected, where, and log retention war
 ## How it works
 
 ```
-                                  ┌──────────── calvin start ────────────┐
-~/.claude/projects/**/*.jsonl ───┐ │                                      │
-~/.copilot/session-state + DB ───┼─► catch up + follow ──► SQLite ──► dashboard ──► 127.0.0.1:1982
-skill folders ───────────────────┘ │                                      │
-                                  └──────────── calvin stop ─────────────┘
+~/.claude/projects/**/*.jsonl ──┐
+~/.copilot/session-state + DB ──┤
+Cursor state.vscdb ─────────────┼──► catch up + follow ──► SQLite ──► dashboard ──► 127.0.0.1:1982
+~/.cursor rules + skills ───────┤
+skill folders ──────────────────┘
 ```
 
 - **One process:** it imports, watches and serves the dashboard together. One start, one stop.
