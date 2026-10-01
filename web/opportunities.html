@@ -383,7 +383,10 @@
     async function initAdvisor() {
       providers = await fetch("/api/advisor/providers").then((r) => r.json());
       const sel = $("#provider");
-      sel.innerHTML = providers.map((p) => `<option value="${p.id}" ${p.selected ? "selected" : ""}>${esc(p.name)}${p.available ? "" : " (not set up)"}</option>`).join("");
+      sel.innerHTML = providers.map((p) => {
+        const unavailable = p.id === "command" ? "not configured" : "not installed";
+        return `<option value="${p.id}" ${p.selected ? "selected" : ""}>${esc(p.name)}${p.available ? "" : ` (${unavailable})`}</option>`;
+      }).join("");
       sel.onchange = () => chooseProvider(sel.value);
       updateAdvisorUi();
       loadPast();
@@ -398,7 +401,18 @@
       $("#custom").classList.toggle("show", isCustom && !p.available);
       $("#ask").textContent = `Ask ${p ? p.name : "the advisor"} to prioritize these opportunities`;
       $("#ask").disabled = !p || !p.available || polling !== null;
-      $("#advnote").textContent = !p ? "" : p.available ? `Plan writer only · ${p.detail}` : isCustom ? "Set the plan-writer command below." : `${p.name} was not found on this machine.`;
+      const note = $("#advnote");
+      if (!p) {
+        note.textContent = "";
+      } else if (p.available) {
+        note.textContent = `Plan writer only · ${p.detail}`;
+      } else if (isCustom) {
+        note.textContent = "Set the plan-writer command below.";
+      } else if (p.id === "cursor") {
+        note.innerHTML = `Cursor Desktop analytics are connected. The optional standalone Cursor Agent CLI is not installed, so Calvin cannot use it to write plans. <a href="https://cursor.com/docs/cli/installation" target="_blank" rel="noreferrer">Install Cursor Agent CLI</a>.`;
+      } else {
+        note.textContent = `${p.name} was not found on this machine. Select an installed plan writer.`;
+      }
     }
 
     async function chooseProvider(id, custom) {

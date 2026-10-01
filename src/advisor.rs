@@ -134,7 +134,7 @@ impl Provider {
         match self {
             Provider::ClaudeCode(_) => "Claude Code".into(),
             Provider::CopilotCli(_) => "GitHub Copilot CLI".into(),
-            Provider::Cursor(_) => "Cursor Agent".into(),
+            Provider::Cursor(_) => "Cursor Agent CLI".into(),
             Provider::Command(c) if !c.name.trim().is_empty() => c.name.trim().to_string(),
             Provider::Command(c) => c.program.clone(),
         }
@@ -165,7 +165,7 @@ pub fn providers(cfg: &AdvisorConfig) -> Vec<ProviderInfo> {
         },
         ProviderInfo {
             id: "cursor",
-            name: "Cursor Agent".into(),
+            name: "Cursor Agent CLI".into(),
             available: find_program(&cfg.cursor.program).is_some(),
             detail: format!("{} · read-only ask mode", cfg.cursor.model),
             selected: cfg.provider == "cursor",
