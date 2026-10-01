@@ -52,8 +52,8 @@
     </section>
 
     <section class="panel span-8" id="costPanel">
-      <h2>Spend per day</h2>
-      <p class="sub">Estimated from token counts at API list price. Hover a bar for the day.</p>
+      <h2 id="costTitle">Billing usage per day</h2>
+      <p class="sub" id="costNote">Claude estimated USD and Copilot-reported AI units use separate axes. Hover a bar for the day.</p>
       <svg id="costChart" viewBox="0 0 900 330"></svg>
     </section>
 
@@ -205,6 +205,17 @@
 
     // ---------- cost chart ----------
     function renderCost(rows) {
+      const harness = selectedHarness();
+      const showClaude = harness !== "copilot-cli";
+      const showCopilot = harness !== "claude-code";
+      $("#costTitle").textContent = harness === "claude-code" ? "Claude Code spend per day"
+        : harness === "copilot-cli" ? "Copilot AI units per day"
+        : "Billing usage per day";
+      $("#costNote").textContent = harness === "claude-code"
+        ? "Estimated from token counts at API list price. Hover a bar for the day."
+        : harness === "copilot-cli"
+          ? "AI units reported by Copilot CLI. Hover a bar for the day."
+          : "Claude estimated USD (orange, left axis) and Copilot-reported AI units (blue, right axis) remain separate.";
       const byDay = new Map(rows.map((r) => [r.key, r]));
       const days = [];
       for (let i = range - 1; i >= 0; i--) {
@@ -212,39 +223,64 @@
         d.setHours(12, 0, 0, 0);
         d.setDate(d.getDate() - i);
         const r = byDay.get(localDay(d));
-        days.push({ d, cost: r?.cost_usd ?? 0, sessions: r?.sessions ?? 0, requests: r?.requests ?? 0 });
+        days.push({ d, cost: r?.cost_usd ?? 0, units: r?.ai_units ?? 0, sessions: r?.sessions ?? 0, requests: r?.requests ?? 0 });
       }
       const svg = $("#costChart");
       svg.innerHTML = "";
-      const W = 900, H = 330, L = 46, R = 6, T = 10, B = 26;
+      const W = 900, H = 330, L = 56, R = showCopilot ? 62 : 6, T = 10, B = 26;
       const pw = W - L - R, ph = H - T - B;
-      const max = Math.max(1, ...days.map((d) => d.cost));
-      const step = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000].find((s) => max / s <= 5) ?? 2000;
-      const top = Math.ceil(max / step) * step;
-      const y = (v) => T + ph - (v / top) * ph;
+      const scale = (max) => {
+        if (max <= 0) return { top: 1, step: 0.2 };
+        const rough = max / 5;
+        const power = 10 ** Math.floor(Math.log10(rough));
+        const step = [1, 2, 5, 10].map((n) => n * power).find((n) => n >= rough);
+        return { top: Math.ceil(max / step) * step, step };
+      };
+      const usd = scale(Math.max(...days.map((d) => d.cost)));
+      const aiu = scale(Math.max(...days.map((d) => d.units)));
+      const y = (v, top) => T + ph - (v / top) * ph;
+      const axis = (v) => v < 1 ? v.toFixed(2) : v < 10 ? v.toFixed(1) : v.toFixed(0);
 
-      for (let v = 0; v <= top; v += step) {
-        svg.append(el("line", { x1: L, x2: W - R, y1: y(v), y2: y(v), class: "grid-line" }));
-        svg.append(el("text", { x: L - 8, y: y(v) + 4, "text-anchor": "end" }, "$" + v));
+      const gridScale = showClaude ? usd : aiu;
+      for (let v = 0; v <= gridScale.top + gridScale.step / 2; v += gridScale.step) {
+        svg.append(el("line", { x1: L, x2: W - R, y1: y(v, gridScale.top), y2: y(v, gridScale.top), class: "grid-line" }));
+      }
+      if (showClaude) {
+        for (let v = 0; v <= usd.top + usd.step / 2; v += usd.step) {
+          svg.append(el("text", { x: L - 8, y: y(v, usd.top) + 4, "text-anchor": "end" }, "$" + axis(v)));
+        }
+      }
+      if (showCopilot) {
+        for (let v = 0; v <= aiu.top + aiu.step / 2; v += aiu.step) {
+          svg.append(el("text", { x: W - R + 8, y: y(v, aiu.top) + 4, "text-anchor": "start" }, axis(v) + " AIU"));
+        }
       }
       const slot = pw / days.length;
-      const bw = Math.max(2, slot - 2);
+      const series = (showClaude ? 1 : 0) + (showCopilot ? 1 : 0);
+      const gap = series > 1 ? 1 : 0;
+      const bw = Math.max(2, (slot - 2 - gap) / series);
       const labelEvery = Math.ceil(days.length / 7);
       days.forEach((d, i) => {
-        const x = L + i * slot + (slot - bw) / 2;
-        const h = Math.max(0, y(0) - y(d.cost));
-        const r = Math.min(4, bw / 2, h);
+        const baseX = L + i * slot + (slot - (bw * series + gap * (series - 1))) / 2;
         const hit = el("rect", { x: L + i * slot, y: T, width: slot, height: ph, class: "hit" });
-        hit.addEventListener("mousemove", (e) =>
-          showTip(e, `<b>${fmtDate(d.d)}</b><br>${money(d.cost)} · ${d.sessions} sessions<br><span class="m">${num(d.requests)} model requests</span>`));
+        hit.addEventListener("mousemove", (e) => {
+          const billing = [showClaude ? money(d.cost) + " Claude estimate" : "", showCopilot ? d.units.toFixed(2) + " Copilot AIU" : ""].filter(Boolean).join("<br>");
+          showTip(e, `<b>${fmtDate(d.d)}</b><br>${billing}<br><span class="m">${d.sessions} sessions · ${num(d.requests)} model requests</span>`);
+        });
         hit.addEventListener("mouseleave", hideTip);
         svg.append(hit);
-        if (h > 0) {
+        const draw = (value, top, x, cls) => {
+          const h = Math.max(0, y(0, top) - y(value, top));
+          const r = Math.min(4, bw / 2, h);
+          if (h <= 0) return;
           svg.append(el("path", {
-            class: "bar",
-            d: `M${x},${y(0)} V${y(0) - h + r} Q${x},${y(0) - h} ${x + r},${y(0) - h} H${x + bw - r} Q${x + bw},${y(0) - h} ${x + bw},${y(0) - h + r} V${y(0)} Z`,
+            class: `bar ${cls}`,
+            d: `M${x},${y(0, top)} V${y(0, top) - h + r} Q${x},${y(0, top) - h} ${x + r},${y(0, top) - h} H${x + bw - r} Q${x + bw},${y(0, top) - h} ${x + bw},${y(0, top) - h + r} V${y(0, top)} Z`,
           }));
-        }
+        };
+        let offset = 0;
+        if (showClaude) { draw(d.cost, usd.top, baseX, "claude-code"); offset = bw + gap; }
+        if (showCopilot) draw(d.units, aiu.top, baseX + offset, "copilot-cli");
         if (i % labelEvery === 0) svg.append(el("text", { x: L + i * slot + slot / 2, y: H - 6, "text-anchor": "middle" }, fmtDate(d.d)));
       });
     }
@@ -412,7 +448,6 @@
         ]);
         renderKpis(summary, skills);
         renderComparison(comparison);
-        $("#costPanel").style.display = harness === "copilot-cli" ? "none" : "";
         renderCost(cost);
         renderShelf(skills);
         renderPrompts(prompts);

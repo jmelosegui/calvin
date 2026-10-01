@@ -127,6 +127,8 @@ svg { display: block; width: 100%; height: auto; overflow: visible; }
 svg text { fill: var(--muted); font: 500 11px "JetBrains Mono", monospace; }
 .grid-line { stroke: var(--line-dim); stroke-width: 1; }
 .bar { fill: var(--orange); pointer-events: none; }
+.bar.claude-code { fill: var(--claude); }
+.bar.copilot-cli { fill: var(--copilot); }
 .hit { fill: transparent; cursor: crosshair; }
 .frame { fill: none; stroke: var(--line); stroke-width: 1.5; }
 .book { fill: none; stroke: var(--line); stroke-width: 1.3; cursor: pointer; pointer-events: all; }

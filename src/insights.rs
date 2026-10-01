@@ -192,6 +192,7 @@ pub struct CostRow {
     pub cache_read: i64,
     pub cache_write: i64,
     pub cost_usd: f64,
+    pub ai_units: f64,
 }
 
 pub fn cost(conn: &Connection, since: &Since, by: CostBy) -> Result<Vec<CostRow>> {
@@ -203,7 +204,8 @@ pub fn cost(conn: &Connection, since: &Since, by: CostBy) -> Result<Vec<CostRow>
     let sql = format!(
         "SELECT {key} AS key, COUNT(DISTINCT r.session_id), COUNT(*),
                 SUM(r.input_tokens), SUM(r.output_tokens), SUM(r.cache_read),
-                SUM(r.cache_write_5m + r.cache_write_1h), COALESCE(SUM(r.cost_usd), 0) AS cost
+                SUM(r.cache_write_5m + r.cache_write_1h), COALESCE(SUM(r.cost_usd), 0) AS cost,
+                COALESCE(SUM(r.ai_units), 0) AS ai_units
          FROM requests r LEFT JOIN sessions s ON s.id = r.session_id
          WHERE r.ts >= ?1 GROUP BY key ORDER BY {order}"
     );
@@ -219,6 +221,7 @@ pub fn cost(conn: &Connection, since: &Since, by: CostBy) -> Result<Vec<CostRow>
                 cache_read: r.get(5)?,
                 cache_write: r.get(6)?,
                 cost_usd: r.get(7)?,
+                ai_units: r.get(8)?,
             })
         })?
         .collect::<Result<_, _>>()?;

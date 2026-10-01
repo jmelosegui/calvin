@@ -125,6 +125,41 @@ async fn summary_is_json_from_the_database() {
 }
 
 #[tokio::test]
+async fn daily_billing_keeps_copilot_ai_units_separate() {
+    let (tmp, app) = app();
+    let conn = db::open(&tmp.path().join("calvin.db")).unwrap();
+    conn.execute(
+        "INSERT INTO sessions (id, harness, started_at)
+         VALUES ('copilot-cli:billing', 'copilot-cli', '2026-09-30T12:00:00Z')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO requests
+         (request_id, session_id, ts, input_tokens, output_tokens, cache_read,
+          cache_write_5m, cache_write_1h, ai_units)
+         VALUES ('copilot-billing', 'copilot-cli:billing', '2026-09-30T12:01:00Z',
+                 0, 0, 0, 0, 0, 2.5)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    let res = app
+        .oneshot(get(
+            "/api/cost?by=day&since=all&harness=copilot-cli",
+            "127.0.0.1:1982",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let rows: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(rows[0]["cost_usd"], 0.0);
+    assert_eq!(rows[0]["ai_units"], 2.5);
+}
+
+#[tokio::test]
 async fn advisor_preview_requires_docs_for_every_harness() {
     let (tmp, app) = app();
     let conn = db::open(&tmp.path().join("calvin.db")).unwrap();
