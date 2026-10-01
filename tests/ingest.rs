@@ -192,6 +192,23 @@ fn imports_cursor_sqlite_sessions_and_timeline() {
         ingest_cursor(&mut conn, &state_db, &PriceTable::bundled(), &mut Quiet).unwrap();
     assert_eq!(unchanged.files_read, 0);
     assert_eq!(count(&conn, "SELECT COUNT(*) FROM requests"), 1);
+
+    let prices = PriceTable::bundled();
+    let cursor_dir = tmp.path().join(".cursor");
+    let ctx = calvin::opportunities::Context {
+        claude_dir: tmp.path(),
+        copilot_dir: tmp.path(),
+        cursor_dir: &cursor_dir,
+        cursor_state_db: &state_db,
+        prices: &prices,
+        skills: &[],
+    };
+    let opportunities = calvin::opportunities::run(&conn, &Since::all(), &ctx).unwrap();
+    let ids: Vec<_> = opportunities.iter().map(|item| item.id).collect();
+    assert!(ids.contains(&"cursor-hooks"));
+    assert!(ids.contains(&"cursor-subagents"));
+    assert!(ids.contains(&"cursor-worktrees"));
+    assert!(ids.contains(&"cursor-headless"));
 }
 
 fn copilot_fixture() -> (tempfile::TempDir, PathBuf) {
@@ -367,6 +384,8 @@ fn copilot_inventory_and_recommendations_use_provider_evidence() {
     let ctx = calvin::opportunities::Context {
         claude_dir: tmp.path(),
         copilot_dir: &copilot,
+        cursor_dir: tmp.path(),
+        cursor_state_db: tmp.path(),
         prices: &prices,
         skills: &[],
     };
@@ -656,6 +675,8 @@ fn opportunities_run_on_the_fixture() {
     let ctx = calvin::opportunities::Context {
         claude_dir: &claude,
         copilot_dir: tmp.path(),
+        cursor_dir: tmp.path(),
+        cursor_state_db: tmp.path(),
         prices: &prices,
         skills: &[],
     };

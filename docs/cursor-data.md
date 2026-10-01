@@ -50,3 +50,19 @@ remain unpriced.
 
 Calvin discovers global Cursor skills from `~/.cursor/skills-cursor/*/SKILL.md` and project
 skills from `.cursor/skills/*/SKILL.md`. Skill files are indexed read-only.
+
+## Tailored recommendations
+
+The Opportunities page uses Cursor-only evidence for Cursor recommendations. It checks for:
+
+- substantial Agent sessions that did not use Plan mode;
+- high-context sessions that did not use `/summarize` or `/compress`;
+- broad edits that did not run `/agent-review`;
+- projects without `AGENTS.md` or `.cursor/rules`;
+- adoption of rules, hooks, subagents, worktrees, skills, MCP/plugins, Ask and Debug modes,
+  session controls, status indicators, sandboxing, headless automation and Cloud Agents.
+
+These deterministic checks are shown without running an AI advisor. The optional advisor
+inventory includes Cursor's tools, models, modes, slash commands, setting keys, MCP server
+names and customization counts, then requires the advisor to consult
+`https://cursor.com/docs/llms.txt` before recommending additional current features.

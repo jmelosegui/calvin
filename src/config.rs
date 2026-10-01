@@ -29,12 +29,13 @@ pub struct Config {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AdvisorConfig {
-    /// `claude-code`, `copilot-cli` or `command`.
+    /// `claude-code`, `copilot-cli`, `cursor` or `command`.
     pub provider: String,
     #[serde(rename = "claude-code")]
     pub claude_code: ClaudeCodeAdvisor,
     #[serde(rename = "copilot-cli")]
     pub copilot_cli: CopilotCliAdvisor,
+    pub cursor: CursorAdvisor,
     pub command: CommandAdvisor,
 }
 
@@ -44,6 +45,7 @@ impl Default for AdvisorConfig {
             provider: "claude-code".into(),
             claude_code: ClaudeCodeAdvisor::default(),
             copilot_cli: CopilotCliAdvisor::default(),
+            cursor: CursorAdvisor::default(),
             command: CommandAdvisor::default(),
         }
     }
@@ -92,6 +94,25 @@ impl Default for CopilotCliAdvisor {
             program: "copilot".into(),
             model: "auto".into(),
             max_ai_credits: 50,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct CursorAdvisor {
+    /// The standalone Cursor Agent CLI executable.
+    pub program: String,
+    pub model: String,
+    pub docs_index: String,
+}
+
+impl Default for CursorAdvisor {
+    fn default() -> Self {
+        Self {
+            program: "agent".into(),
+            model: "auto".into(),
+            docs_index: "https://cursor.com/docs/llms.txt".into(),
         }
     }
 }

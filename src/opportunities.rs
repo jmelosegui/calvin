@@ -82,6 +82,8 @@ impl Metric {
 pub struct Context<'a> {
     pub claude_dir: &'a Path,
     pub copilot_dir: &'a Path,
+    pub cursor_dir: &'a Path,
+    pub cursor_state_db: &'a Path,
     pub prices: &'a PriceTable,
     pub skills: &'a [InstalledSkill],
 }
@@ -94,8 +96,18 @@ pub fn run(conn: &Connection, since: &Since, ctx: &Context) -> Result<Vec<Opport
         copilot_compact(conn, since)?,
         copilot_review(conn, since)?,
         copilot_autopilot(conn, since)?,
+        cursor_project_instructions(conn, since)?,
+        cursor_plan_mode(conn, since)?,
+        cursor_compact(conn, since)?,
+        cursor_review(conn, since)?,
     ];
     out.extend(copilot_feature_catalog(conn, since, ctx.copilot_dir)?);
+    out.extend(cursor_feature_catalog(
+        conn,
+        since,
+        ctx.cursor_dir,
+        ctx.cursor_state_db,
+    )?);
     conn.execute_batch(
         "CREATE TEMP VIEW sessions AS SELECT * FROM main.sessions WHERE harness = 'claude-code';
          CREATE TEMP VIEW prompts AS SELECT p.* FROM main.prompts p
@@ -310,7 +322,7 @@ fn shared_agents_md(conn: &Connection, since: &Since) -> Result<Opportunity> {
     let mut stmt = conn.prepare(
         "SELECT DISTINCT s.cwd, s.harness FROM sessions s
          WHERE s.cwd IS NOT NULL AND s.started_at >= ?1
-           AND s.harness IN ('claude-code', 'copilot-cli')",
+           AND s.harness IN ('claude-code', 'copilot-cli', 'cursor')",
     )?;
     let mut roots: BTreeMap<PathBuf, HashSet<String>> = BTreeMap::new();
     for row in stmt.query_map([&since.0], |r| {
@@ -324,7 +336,7 @@ fn shared_agents_md(conn: &Connection, since: &Since) -> Result<Opportunity> {
     }
     let shared: Vec<PathBuf> = roots
         .into_iter()
-        .filter(|(_, harnesses)| harnesses.len() == 2)
+        .filter(|(_, harnesses)| harnesses.len() >= 2)
         .map(|(root, _)| root)
         .collect();
     if shared.is_empty() {
@@ -356,16 +368,16 @@ fn shared_agents_md(conn: &Connection, since: &Since) -> Result<Opportunity> {
         title: "Keep shared project instructions in AGENTS.md".into(),
         finding: if missing == 0 {
             format!(
-                "All {} projects used with both Claude Code and Copilot CLI have one shared instruction source.",
+                "All {} projects used with multiple supported tools have one shared instruction source.",
                 shared.len()
             )
         } else {
             format!(
-                "{missing} of {} projects used with both tools duplicate instructions or do not have a canonical AGENTS.md.",
+                "{missing} of {} projects used with multiple tools duplicate instructions or do not have a canonical AGENTS.md.",
                 shared.len()
             )
         },
-        why: "Both CLIs understand AGENTS.md. Keeping build, test, architecture and coding conventions there prevents the two tools from receiving different project guidance.".into(),
+        why: "Claude Code, Copilot CLI and Cursor understand AGENTS.md. Keeping build, test, architecture and coding conventions there prevents tools from receiving different project guidance.".into(),
         fix: "Move shared instructions into AGENTS.md. If Claude-specific guidance remains, keep a small CLAUDE.md that starts with @AGENTS.md and contains only the Claude-specific section; otherwise remove CLAUDE.md.".into(),
         snippet: Some("@AGENTS.md\n\n## Claude Code\n\n<!-- Claude-specific guidance only -->".into()),
         saving_usd: None,
@@ -690,7 +702,517 @@ fn copilot_feature_catalog(
     if sessions == 0 {
         return Ok(Vec::new());
     }
+    copilot_feature_catalog_inner(conn, since, copilot_dir)
+}
 
+fn cursor_project_instructions(conn: &Connection, since: &Since) -> Result<Opportunity> {
+    let roots = cursor_roots(conn, since)?;
+    if roots.is_empty() {
+        return Ok(skip());
+    }
+    let missing: Vec<_> = roots
+        .iter()
+        .filter(|root| {
+            !root.join("AGENTS.md").is_file()
+                && !root.join(".cursor").join("rules").is_dir()
+                && !root.join(".cursorrules").is_file()
+        })
+        .collect();
+    Ok(Opportunity {
+            id: "cursor-project-instructions",
+            area: "Instructions",
+            status: if missing.is_empty() {
+                Status::Good
+            } else {
+                Status::Action
+            },
+            title: "Give Cursor persistent project instructions".into(),
+            finding: if missing.is_empty() {
+                format!(
+                    "All {} Cursor projects have AGENTS.md or Cursor project rules.",
+                    roots.len()
+                )
+            } else {
+                format!(
+                    "{} of {} Cursor projects have no AGENTS.md or .cursor/rules directory.",
+                    missing.len(),
+                    roots.len()
+                )
+            },
+            why: "Persistent instructions keep build commands, architecture and conventions available without repeating them in every Agent session.".into(),
+            fix: "Put guidance shared with other coding agents in AGENTS.md. Add focused .cursor/rules/*.mdc files only for Cursor-specific or path-scoped instructions; do not duplicate the same guidance in both.".into(),
+            snippet: Some("/create-rule".into()),
+            saving_usd: None,
+            evidence: missing
+                .iter()
+                .take(12)
+                .map(|root| Evidence {
+                    label: root
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| root.display().to_string()),
+                    detail: Some(root.display().to_string()),
+                    link: None,
+                })
+                .collect(),
+            metric: Metric::lower(missing.len() as f64, "Cursor projects without instructions"),
+        })
+}
+
+fn cursor_plan_mode(conn: &Connection, since: &Since) -> Result<Opportunity> {
+    let mut statement = conn.prepare(
+        "SELECT s.id, COALESCE(s.title, s.project, s.id),
+                    (SELECT COUNT(*) FROM tool_calls t WHERE t.session_id = s.id),
+                    (SELECT COUNT(*) FROM session_files f WHERE f.session_id = s.id)
+             FROM sessions s
+             WHERE s.harness = 'cursor' AND s.started_at >= ?1
+               AND ((SELECT COUNT(*) FROM tool_calls t WHERE t.session_id = s.id) >= 12
+                    OR (SELECT COUNT(*) FROM session_files f WHERE f.session_id = s.id) >= 4)
+               AND NOT EXISTS (
+                   SELECT 1 FROM session_modes m
+                   WHERE m.session_id = s.id AND lower(m.mode) = 'plan'
+               )
+             ORDER BY 3 DESC LIMIT 12",
+    )?;
+    let rows: Vec<(String, String, i64, i64)> = statement
+        .query_map([&since.0], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?
+        .collect::<Result<_, _>>()?;
+    if rows.is_empty() {
+        return Ok(skip());
+    }
+    Ok(Opportunity {
+            id: "cursor-plan-mode",
+            area: "Planning",
+            status: Status::Action,
+            title: "Use Cursor Plan mode before substantial changes".into(),
+            finding: format!(
+                "{} substantial Cursor session{} used Agent mode without a recorded Plan-mode phase.",
+                rows.len(),
+                if rows.len() == 1 { "" } else { "s" }
+            ),
+            why: "Plan mode lets you review the approach, files and tradeoffs before Cursor starts editing, reducing rework on multi-file tasks.".into(),
+            fix: "Start substantial work with /plan, refine the proposed plan, then switch to Agent mode when the steps and validation are clear.".into(),
+            snippet: Some("/plan <objective>".into()),
+            saving_usd: None,
+            evidence: rows
+                .iter()
+                .map(|(id, title, tools, files)| Evidence {
+                    label: title.clone(),
+                    detail: Some(format!("{tools} tool calls · {files} files")),
+                    link: Some(format!("/sessions#{id}")),
+                })
+                .collect(),
+            metric: Metric::lower(rows.len() as f64, "substantial Cursor sessions without Plan mode"),
+        })
+}
+
+fn cursor_compact(conn: &Connection, since: &Since) -> Result<Opportunity> {
+    let mut statement = conn.prepare(
+        "SELECT s.id, COALESCE(s.title, s.project, s.id), SUM(r.input_tokens)
+             FROM requests r JOIN sessions s ON s.id = r.session_id
+             WHERE s.harness = 'cursor' AND r.ts >= ?1
+             GROUP BY s.id
+             HAVING SUM(r.input_tokens) >= 250000
+                AND NOT EXISTS (
+                    SELECT 1 FROM prompts p
+                    WHERE p.session_id = s.id
+                      AND (p.text LIKE '/summarize%' OR p.text LIKE '/compress%')
+                )
+             ORDER BY 3 DESC LIMIT 12",
+    )?;
+    let rows: Vec<(String, String, i64)> = statement
+        .query_map([&since.0], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
+        .collect::<Result<_, _>>()?;
+    if rows.is_empty() {
+        return Ok(skip());
+    }
+    Ok(Opportunity {
+            id: "cursor-context-compression",
+            area: "Context",
+            status: Status::Consider,
+            title: "Summarize long Cursor conversations before context gets noisy".into(),
+            finding: format!(
+                "{} Cursor session{} accumulated at least 250k recorded input tokens without /summarize or /compress.",
+                rows.len(),
+                if rows.len() == 1 { "" } else { "s" }
+            ),
+            why: "Long agent threads repeatedly send growing context. Summarizing preserves the important decisions while removing stale intermediate detail.".into(),
+            fix: "Use /summarize (or /compress) at a clean task boundary, or start a focused session and carry forward only the relevant plan and constraints.".into(),
+            snippet: Some("/summarize".into()),
+            saving_usd: None,
+            evidence: rows
+                .iter()
+                .map(|(id, title, tokens)| Evidence {
+                    label: title.clone(),
+                    detail: Some(format!("{} input tokens", tokens)),
+                    link: Some(format!("/sessions#{id}")),
+                })
+                .collect(),
+            metric: Metric::lower(rows.len() as f64, "high-context Cursor sessions not summarized"),
+        })
+}
+
+fn cursor_review(conn: &Connection, since: &Since) -> Result<Opportunity> {
+    let mut statement = conn.prepare(
+        "SELECT s.id, COALESCE(s.title, s.project, s.id), COUNT(sf.file_path)
+             FROM sessions s JOIN session_files sf ON sf.session_id = s.id
+             WHERE s.harness = 'cursor' AND s.started_at >= ?1
+             GROUP BY s.id
+             HAVING COUNT(sf.file_path) >= 5
+                AND NOT EXISTS (
+                    SELECT 1 FROM prompts p
+                    WHERE p.session_id = s.id AND p.text LIKE '/agent-review%'
+                )
+             ORDER BY 3 DESC LIMIT 12",
+    )?;
+    let rows: Vec<(String, String, i64)> = statement
+        .query_map([&since.0], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
+        .collect::<Result<_, _>>()?;
+    if rows.is_empty() {
+        return Ok(skip());
+    }
+    Ok(Opportunity {
+            id: "cursor-agent-review",
+            area: "Quality",
+            status: Status::Action,
+            title: "Run Cursor Agent Review on broad changes".into(),
+            finding: format!(
+                "{} Cursor session{} changed at least five files without a recorded /agent-review command.",
+                rows.len(),
+                if rows.len() == 1 { "" } else { "s" }
+            ),
+            why: "Agent Review uses a separate review pass over local changes and can catch cross-file logic errors that the implementation thread overlooks.".into(),
+            fix: "Run /agent-review before committing broad changes. Use Deep review for complex or security-sensitive work and Quick review for small diffs.".into(),
+            snippet: Some("/agent-review".into()),
+            saving_usd: None,
+            evidence: rows
+                .iter()
+                .map(|(id, title, files)| Evidence {
+                    label: title.clone(),
+                    detail: Some(format!("{files} files touched")),
+                    link: Some(format!("/sessions#{id}")),
+                })
+                .collect(),
+            metric: Metric::lower(rows.len() as f64, "broad Cursor sessions without Agent Review"),
+        })
+}
+
+fn cursor_feature_catalog(
+    conn: &Connection,
+    since: &Since,
+    cursor_dir: &Path,
+    cursor_state_db: &Path,
+) -> Result<Vec<Opportunity>> {
+    let sessions: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sessions WHERE harness = 'cursor' AND started_at >= ?1",
+        [&since.0],
+        |row| row.get(0),
+    )?;
+    if sessions == 0 {
+        return Ok(Vec::new());
+    }
+    let roots = cursor_roots(conn, since)?;
+    let commands = cursor_commands(conn, since)?;
+    let used = |prefixes: &[&str]| {
+        commands
+            .iter()
+            .any(|command| prefixes.iter().any(|prefix| command.starts_with(prefix)))
+    };
+    let count_entries = |dir: &Path| {
+        std::fs::read_dir(dir)
+            .map(|entries| entries.filter_map(Result::ok).count())
+            .unwrap_or(0)
+    };
+    let settings = cursor_state_db
+        .parent()
+        .and_then(Path::parent)
+        .map(|user| read_json(&user.join("settings.json")))
+        .unwrap_or(Value::Null);
+    let cli_config = read_json(&cursor_dir.join("cli-config.json"));
+    let user_rules = settings.as_object().is_some_and(|object| {
+        object.iter().any(|(key, value)| {
+            key.to_ascii_lowercase().contains("rule")
+                && match value {
+                    Value::Null => false,
+                    Value::String(text) => !text.is_empty(),
+                    _ => true,
+                }
+        })
+    }) || count_entries(&cursor_dir.join("rules")) > 0;
+    let project_rules: usize = roots
+        .iter()
+        .map(|root| count_entries(&root.join(".cursor").join("rules")))
+        .sum();
+    let agents = count_entries(&cursor_dir.join("agents"))
+        + roots
+            .iter()
+            .map(|root| count_entries(&root.join(".cursor").join("agents")))
+            .sum::<usize>();
+    let skills = count_entries(&cursor_dir.join("skills-cursor"))
+        + roots
+            .iter()
+            .map(|root| count_entries(&root.join(".cursor").join("skills")))
+            .sum::<usize>();
+    let hooks = usize::from(cursor_dir.join("hooks.json").is_file())
+        + roots
+            .iter()
+            .filter(|root| root.join(".cursor").join("hooks.json").is_file())
+            .count();
+    let mcp_servers = read_json(&cursor_dir.join("mcp.json"))
+        .get("mcpServers")
+        .and_then(Value::as_object)
+        .map_or(0, serde_json::Map::len);
+    let plugins = count_entries(&cursor_dir.join("plugins"));
+    let worktrees = used(&["/worktree", "/best-of-n", "/apply-worktree"])
+        || roots
+            .iter()
+            .any(|root| root.join(".cursor").join("worktrees.json").is_file());
+    let modes = cursor_modes(conn, since)?;
+    let subagents_used = agents > 0
+        || conn.query_row(
+            "SELECT EXISTS(
+                     SELECT 1 FROM tool_calls t JOIN sessions s ON s.id = t.session_id
+                     WHERE s.harness = 'cursor' AND t.ts >= ?1
+                       AND lower(t.tool) LIKE '%task%'
+                 )",
+            [&since.0],
+            |row| row.get::<_, bool>(0),
+        )?;
+    let sandbox = used(&["/sandbox"]) || cli_config.get("sandbox").is_some();
+    let session_controls = used(&["/resume", "/fork", "/rewind", "/summarize", "/compress"]);
+    let status_indicators = used(&["/status-indicators", "/show-thinking"]);
+
+    Ok(vec![
+        cursor_feature(
+            "cursor-rules",
+            user_rules || project_rules > 0,
+            "Turn recurring guidance into focused Cursor rules",
+            format!(
+                "{project_rules} project rule file(s) and {} user-level rule source(s) were discovered.",
+                usize::from(user_rules)
+            ),
+            "Rules provide persistent, scoped context. They are more reliable than repeating the same conventions in prompts.",
+            "Keep shared repository guidance in AGENTS.md. Use /create-rule for focused Cursor-only rules with descriptions or file globs.",
+            Some("/create-rule"),
+        ),
+        cursor_feature(
+            "cursor-hooks",
+            hooks > 0,
+            "Automate guardrails with Cursor hooks",
+            format!("{hooks} user or project hooks.json file(s) were discovered."),
+            "Hooks can format after edits, gate risky shell or MCP actions, scan for secrets and inject context at session start.",
+            "Create ~/.cursor/hooks.json for personal automation or .cursor/hooks.json for repository guardrails. Start with afterFileEdit or beforeShellExecution.",
+            Some("/create-hook"),
+        ),
+        cursor_feature(
+            "cursor-subagents",
+            subagents_used,
+            "Use Cursor subagents for isolated or parallel work",
+            if subagents_used {
+                format!("Subagent activity or {agents} custom agent definition(s) were discovered.")
+            } else {
+                "No subagent activity or custom .cursor/agents definitions were discovered.".into()
+            },
+            "Subagents keep exploration, command output and independent workstreams out of the main context window.",
+            "Let Agent delegate exploration automatically, or add a focused verifier under .cursor/agents for independent validation.",
+            Some("/create-subagent"),
+        ),
+        cursor_feature(
+            "cursor-worktrees",
+            worktrees,
+            "Use Cursor worktrees for risky or parallel changes",
+            if worktrees {
+                "Worktree commands or .cursor/worktrees.json were discovered.".into()
+            } else {
+                "No Cursor worktree commands or setup file were discovered.".into()
+            },
+            "Worktrees isolate dependencies and edits so multiple agents can work on one repository without colliding with the current checkout.",
+            "Use /worktree for one isolated task or /best-of-n to compare several model approaches. Add .cursor/worktrees.json when setup is repetitive.",
+            Some("/worktree <task>"),
+        ),
+        cursor_feature(
+            "cursor-skills",
+            skills > 0,
+            "Package repeatable Cursor workflows as skills",
+            format!("{skills} global or project Cursor skill(s) were discovered."),
+            "Skills make repeatable single-purpose workflows discoverable without keeping every procedure in always-loaded rules.",
+            "Create a SKILL.md under ~/.cursor/skills-cursor or .cursor/skills for tasks you perform repeatedly.",
+            Some("/create-skill"),
+        ),
+        cursor_feature(
+            "cursor-mcp-plugins",
+            mcp_servers + plugins > 0,
+            "Connect Cursor to the systems you use",
+            format!("{mcp_servers} MCP server(s) and {plugins} plugin entry(s) were discovered."),
+            "MCP and plugins can expose issue trackers, documentation and internal tools directly to Agent instead of copying context manually.",
+            "Use /mcp to inspect servers and /plugin to manage extensions. Add only integrations tied to recurring work.",
+            Some("/mcp list"),
+        ),
+        cursor_feature(
+            "cursor-ask-debug-modes",
+            modes.contains("ask") || modes.contains("debug"),
+            "Use Ask and Debug modes before editing",
+            format!(
+                "Recorded modes: {}.",
+                if modes.is_empty() {
+                    "Agent only".into()
+                } else {
+                    modes.iter().cloned().collect::<Vec<_>>().join(", ")
+                }
+            ),
+            "Ask mode keeps read-only questions from editing files, while Debug mode gathers runtime evidence before proposing a fix.",
+            "Use /ask for architecture and codebase questions, and /debug when the failure needs logs or reproduction evidence.",
+            Some("/ask"),
+        ),
+        cursor_feature(
+            "cursor-session-controls",
+            session_controls,
+            "Use Cursor session navigation and recovery controls",
+            if session_controls {
+                "Resume, fork, rewind or context-compression commands were used in this period."
+                    .into()
+            } else {
+                "No /resume, /fork, /rewind, /summarize or /compress usage was recorded.".into()
+            },
+            "Resuming preserves useful context, forking explores alternatives safely, rewind backs out a bad turn and summarize reduces context pressure.",
+            "Use /resume to reopen relevant work, /fork before an alternate approach, /rewind after a bad turn and /summarize at clean boundaries.",
+            Some("/resume"),
+        ),
+        cursor_feature(
+            "cursor-status-indicators",
+            status_indicators,
+            "Make long Cursor CLI work visible",
+            if status_indicators {
+                "Terminal status indicators or thinking display were used in this period.".into()
+            } else {
+                "No /status-indicators or /show-thinking usage was recorded.".into()
+            },
+            "Status indicators update the terminal title while the agent is working; thinking visibility helps diagnose slow or surprising turns.",
+            "Enable /status-indicators and use /show-thinking when you need to inspect the reasoning trace.",
+            Some("/status-indicators on"),
+        ),
+        cursor_feature(
+            "cursor-sandbox",
+            sandbox,
+            "Run Cursor CLI commands in its sandbox",
+            if sandbox {
+                "Sandbox configuration or /sandbox usage was discovered.".into()
+            } else {
+                "No Cursor CLI sandbox configuration or command was discovered.".into()
+            },
+            "The sandbox constrains filesystem and network access for shell commands, reducing the blast radius of autonomous work.",
+            "Run /sandbox to configure it interactively, or use agent --sandbox enabled for headless tasks.",
+            Some("/sandbox"),
+        ),
+        cursor_feature(
+            "cursor-headless",
+            false,
+            "Automate read-only analysis with Cursor's headless CLI",
+            "Local conversation storage does not prove that agent -p is used in scripts or CI."
+                .into(),
+            "Print mode supports repeatable code analysis, structured JSON output and CI checks without an interactive terminal.",
+            "Start with read-only ask mode: agent -p --mode ask --output-format text \"<question>\". Add --force only when automated edits are intentional.",
+            Some("agent -p --mode ask \"<question>\""),
+        ),
+        cursor_feature(
+            "cursor-cloud-agents",
+            false,
+            "Hand suitable tasks to Cursor Cloud Agents",
+            "The local Cursor session store does not show cloud-agent adoption.".into(),
+            "Cloud Agents can continue bounded work remotely, run in isolated environments and return branches or pull requests.",
+            "Use a cloud agent for a well-scoped task with clear tests and repository access; keep ambiguous design work local first.",
+            None,
+        ),
+    ])
+}
+
+fn cursor_feature(
+    id: &'static str,
+    configured: bool,
+    title: &str,
+    finding: String,
+    why: &str,
+    fix: &str,
+    snippet: Option<&str>,
+) -> Opportunity {
+    Opportunity {
+        id,
+        area: match id {
+            "cursor-hooks" | "cursor-headless" => "Automation",
+            "cursor-rules" | "cursor-session-controls" => "Context",
+            "cursor-subagents" | "cursor-skills" | "cursor-mcp-plugins" => "Agents",
+            "cursor-worktrees" | "cursor-cloud-agents" => "Workflow",
+            "cursor-ask-debug-modes" | "cursor-sandbox" => "Quality",
+            "cursor-status-indicators" => "Interface",
+            _ => "Cursor",
+        },
+        status: if configured {
+            Status::Good
+        } else {
+            Status::Consider
+        },
+        title: title.into(),
+        finding,
+        why: why.into(),
+        fix: fix.into(),
+        snippet: snippet.map(str::to_string),
+        saving_usd: None,
+        evidence: Vec::new(),
+        metric: None,
+    }
+}
+
+fn cursor_roots(conn: &Connection, since: &Since) -> Result<BTreeSet<PathBuf>> {
+    let mut roots = BTreeSet::new();
+    let mut statement = conn.prepare(
+        "SELECT DISTINCT cwd FROM sessions
+             WHERE harness = 'cursor' AND cwd IS NOT NULL AND started_at >= ?1",
+    )?;
+    for row in statement.query_map([&since.0], |row| row.get::<_, String>(0))? {
+        let path = PathBuf::from(row?);
+        if path.is_dir() {
+            roots.insert(repo_root(&path));
+        }
+    }
+    Ok(roots)
+}
+
+fn cursor_commands(conn: &Connection, since: &Since) -> Result<BTreeSet<String>> {
+    let mut commands = BTreeSet::new();
+    let mut statement = conn.prepare(
+        "SELECT p.text FROM prompts p JOIN sessions s ON s.id = p.session_id
+             WHERE s.harness = 'cursor' AND p.kind = 'command' AND p.ts >= ?1",
+    )?;
+    for row in statement.query_map([&since.0], |row| row.get::<_, String>(0))? {
+        commands.insert(row?);
+    }
+    Ok(commands)
+}
+
+fn cursor_modes(conn: &Connection, since: &Since) -> Result<BTreeSet<String>> {
+    let mut modes = BTreeSet::new();
+    let mut statement = conn.prepare(
+        "SELECT DISTINCT lower(m.mode) FROM session_modes m
+             JOIN sessions s ON s.id = m.session_id
+             WHERE s.harness = 'cursor' AND m.ts >= ?1",
+    )?;
+    for row in statement.query_map([&since.0], |row| row.get::<_, String>(0))? {
+        modes.insert(row?);
+    }
+    Ok(modes)
+}
+
+fn copilot_feature_catalog_inner(
+    conn: &Connection,
+    since: &Since,
+    copilot_dir: &Path,
+) -> Result<Vec<Opportunity>> {
     let mut commands = BTreeSet::new();
     let mut stmt = conn.prepare(
         "SELECT p.text FROM prompts p JOIN sessions s ON s.id = p.session_id
