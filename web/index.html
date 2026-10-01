@@ -25,11 +25,13 @@
   <div class="titlebar">
     <h1>How I work with the <span class="px">MODELS</span></h1>
     <div class="actions">
-      <div class="seg" id="harness">
-        <button data-harness="" class="active">All</button>
-        <button data-harness="claude-code">Claude Code</button>
-        <button data-harness="copilot-cli">Copilot CLI</button>
-      </div>
+      <label class="cli-picker">CLI
+        <select id="harness">
+          <option value="">All tools</option>
+          <option value="claude-code">Claude Code</option>
+          <option value="copilot-cli">Copilot CLI</option>
+        </select>
+      </label>
       <div class="seg" id="range">
         <button data-days="7">7d</button>
         <button data-days="30" class="active">30d</button>
@@ -131,7 +133,7 @@
     const hideTip = () => (tip.style.opacity = 0);
 
     let range = 30;
-    const selectedHarness = () => $("#harness button.active")?.dataset.harness ?? "";
+    const selectedHarness = () => $("#harness").value;
 
     // ---------- KPIs ----------
     function renderKpis(s, skills) {
@@ -492,10 +494,7 @@
 
     document.documentElement.dataset.theme = localStorage.getItem("calvin-theme") ?? "dark";
     document.querySelectorAll("#range button").forEach((b) => b.addEventListener("click", () => setRange(+b.dataset.days)));
-    document.querySelectorAll("#harness button").forEach((b) => b.addEventListener("click", () => {
-      document.querySelectorAll("#harness button").forEach((x) => x.classList.toggle("active", x === b));
-      load();
-    }));
+    $("#harness").onchange = load;
     $("#pause").addEventListener("click", togglePause);
     $("#theme").addEventListener("click", toggleTheme);
     $("#fs").addEventListener("click", fullscreen);

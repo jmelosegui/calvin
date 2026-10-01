@@ -72,6 +72,12 @@ body {
 h1 { margin: 0; font-size: 34px; font-weight: 700; letter-spacing: -0.02em; }
 h1 .px { font-family: "Silkscreen", monospace; font-weight: 400; font-size: 36px; color: var(--orange); }
 .actions { margin-left: auto; display: flex; flex-wrap: wrap; gap: 10px; }
+.cli-picker { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; white-space: nowrap; }
+.cli-picker select {
+  padding: 8px 10px; border: 1.5px solid var(--line-dim); border-radius: 8px;
+  background: var(--bg); color: var(--text); font: 500 13px "Outfit", sans-serif;
+}
+.cli-picker select:focus { outline: none; border-color: var(--orange); }
 .btn {
   display: inline-flex; align-items: center; gap: 10px; padding: 10px 16px; border: 0; border-radius: 8px;
   background: var(--btn); color: var(--text); font: 600 14px "Outfit", sans-serif; cursor: pointer;

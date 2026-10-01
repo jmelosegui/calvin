@@ -12,12 +12,6 @@
       background: transparent; color: var(--text); font: 500 14px "Outfit", sans-serif;
     }
     .search:focus { outline: none; border-color: var(--orange); }
-    .scope-picker { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; white-space: nowrap; }
-    .scope-picker select {
-      padding: 8px 10px; border: 1.5px solid var(--line-dim); border-radius: 8px;
-      background: var(--bg); color: var(--text); font: 500 13px "Outfit", sans-serif;
-    }
-    .scope-picker select:focus { outline: none; border-color: var(--orange); }
     .origin { margin-top: 4px; color: var(--muted); font-size: 13px; }
 
     .list { display: grid; gap: 0; }
@@ -96,7 +90,7 @@
     <h1>Skill <span class="px">LIBRARY</span></h1>
     <div class="actions">
       <input class="search" id="q" type="search" placeholder="Search skills  ( / )" autocomplete="off" />
-      <label class="scope-picker">Skills for
+      <label class="cli-picker">CLI
         <select id="provider-filter">
           <option value="">All tools</option>
           <option value="claude-code">Claude Code</option>
