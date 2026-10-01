@@ -473,7 +473,7 @@ mod tests {
             json!({
                 "bubbleId": "answer-1", "type": 2, "createdAt": "2023-11-14T22:13:22Z",
                 "text": "Updated the file."
-            })
+            }),
         ];
         let events = events(&composer, None, Some("C:\\work\\calvin".into()), &bubbles);
         assert!(events.iter().any(|event| matches!(

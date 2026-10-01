@@ -3,15 +3,15 @@
 //! Each file's read position is stored, so re-running only reads new lines. Only complete
 //! lines (ending in `\n`) are consumed; a line still being written is picked up next time.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
-use std::collections::HashMap;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
 use anyhow::{Context, Result};
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use rusqlite::types::Value as SqlValue;
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde_json::Value;
 use walkdir::WalkDir;
 
@@ -249,8 +249,7 @@ pub fn ingest_cursor(
             continue;
         };
         let header = headers.get(native_id);
-        let updated = cursor::updated_at(&composer)
-            .max(header.map_or(0, cursor::updated_at));
+        let updated = cursor::updated_at(&composer).max(header.map_or(0, cursor::updated_at));
         max_updated = max_updated.max(updated);
         let workspace = cursor::workspace_identifier(&composer)
             .or_else(|| header.and_then(cursor::workspace_identifier));
@@ -345,9 +344,7 @@ fn cursor_headers(source: &Connection) -> Result<HashMap<String, Value>> {
         .into_iter()
         .flatten();
     Ok(values
-        .filter_map(|header| {
-            cursor::composer_id(header).map(|id| (id.to_string(), header.clone()))
-        })
+        .filter_map(|header| cursor::composer_id(header).map(|id| (id.to_string(), header.clone())))
         .collect())
 }
 
@@ -402,10 +399,7 @@ fn cursor_bubbles(source: &Connection, composer_id: &str, order: &[String]) -> R
         });
         return Ok(bubbles);
     }
-    let mut bubbles: Vec<_> = order
-        .iter()
-        .filter_map(|id| values.remove(id))
-        .collect();
+    let mut bubbles: Vec<_> = order.iter().filter_map(|id| values.remove(id)).collect();
     let mut unindexed: Vec<_> = values.into_values().collect();
     unindexed.sort_by_key(|bubble| {
         bubble
@@ -467,7 +461,8 @@ fn file_uri_path(value: &str) -> Option<String> {
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut index = 0;
     while index < bytes.len() {
-        if bytes[index] == b'%' && index + 2 < bytes.len()
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
             && let Ok(hex) = u8::from_str_radix(&encoded[index + 1..index + 3], 16)
         {
             decoded.push(hex);

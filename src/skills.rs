@@ -106,12 +106,7 @@ pub fn installed(loc: &Locations) -> Vec<InstalledSkill> {
     for skill in scan(&loc.copilot_dir.join("skills"), 2, "global", "copilot-cli") {
         add(skill);
     }
-    for skill in scan(
-        &loc.cursor_dir.join("skills-cursor"),
-        2,
-        "global",
-        "cursor",
-    ) {
+    for skill in scan(&loc.cursor_dir.join("skills-cursor"), 2, "global", "cursor") {
         add(skill);
     }
 
@@ -138,12 +133,7 @@ pub fn installed(loc: &Locations) -> Vec<InstalledSkill> {
             skill.detail = Some(format!("in the {project} repository"));
             add(skill);
         }
-        for mut skill in scan(
-            &dir.join(".cursor").join("skills"),
-            2,
-            "project",
-            "cursor",
-        ) {
+        for mut skill in scan(&dir.join(".cursor").join("skills"), 2, "project", "cursor") {
             skill.detail = Some(format!("in the {project} repository"));
             add(skill);
         }
@@ -151,11 +141,7 @@ pub fn installed(loc: &Locations) -> Vec<InstalledSkill> {
     for dir in &loc.extra {
         for mut skill in scan(dir, 3, "global", "shared") {
             classify_global(&mut skill, &lock);
-            skill.providers = vec![
-                "claude-code".into(),
-                "copilot-cli".into(),
-                "cursor".into(),
-            ];
+            skill.providers = vec!["claude-code".into(), "copilot-cli".into(), "cursor".into()];
             add(skill);
         }
     }
