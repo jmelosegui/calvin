@@ -157,7 +157,7 @@ pub fn harness_comparison(conn: &Connection, since: &Since) -> Result<Vec<Harnes
         )?;
         let files_touched = conn.query_row(
             "SELECT COUNT(*) FROM session_files sf JOIN sessions s ON s.id = sf.session_id
-             WHERE COALESCE(s.ended_at, s.started_at) >= ?1 AND s.harness = ?2",
+             WHERE sf.first_seen_at >= ?1 AND s.harness = ?2",
             params![since.0, harness],
             |r| r.get(0),
         )?;

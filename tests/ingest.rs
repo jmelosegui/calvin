@@ -56,7 +56,17 @@ fn resumed_sessions_are_recent_activity() {
                  '2026-05-01T10:00:00Z', '2026-10-01T10:00:00Z');
          INSERT INTO prompts (id, session_id, ts, kind, text, is_sidechain)
          VALUES ('cursor:resumed:turn:0', 'cursor:resumed',
-                 '2026-10-01T10:00:00Z', 'prompt', 'Continue the work', 0);",
+                 '2026-05-01T10:00:00Z', 'prompt', 'Historical prompt', 0),
+                ('cursor:resumed:turn:1', 'cursor:resumed',
+                 '2026-10-01T10:00:00Z', 'prompt', 'Continue the work', 0);
+         INSERT INTO tool_calls (id, session_id, ts, tool)
+         VALUES ('cursor:resumed:tool:0', 'cursor:resumed',
+                 '2026-05-01T10:00:01Z', 'read_file'),
+                ('cursor:resumed:tool:1', 'cursor:resumed',
+                 '2026-10-01T10:00:01Z', 'read_file');
+         INSERT INTO session_files (session_id, file_path, first_seen_at)
+         VALUES ('cursor:resumed', 'src/old.rs', '2026-05-01T10:00:01Z'),
+                ('cursor:resumed', 'src/recent.rs', '2026-10-01T10:00:01Z');",
     )
     .unwrap();
     let since = Since("2026-09-01T00:00:00Z".into());
@@ -64,10 +74,11 @@ fn resumed_sessions_are_recent_activity() {
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].id, "cursor:resumed");
     assert_eq!(insights::summary(&conn, &since).unwrap().sessions, 1);
-    assert_eq!(
-        insights::harness_comparison(&conn, &since).unwrap()[0].sessions,
-        1
-    );
+    let comparison = &insights::harness_comparison(&conn, &since).unwrap()[0];
+    assert_eq!(comparison.sessions, 1);
+    assert_eq!(comparison.prompts, 1);
+    assert_eq!(comparison.tool_calls, 1);
+    assert_eq!(comparison.files_touched, 1);
 }
 
 #[test]
