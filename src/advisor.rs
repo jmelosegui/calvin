@@ -17,7 +17,8 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::config::{
-    AdvisorConfig, ClaudeCodeAdvisor, CommandAdvisor, CopilotCliAdvisor, find_program,
+    AdvisorConfig, ClaudeCodeAdvisor, CommandAdvisor, CopilotCliAdvisor, CursorAdvisor,
+    find_program,
 };
 use crate::insights::{ModelRow, Summary};
 use crate::opportunities::{Opportunity, Status};
@@ -26,7 +27,7 @@ use crate::skills::InstalledSkill;
 const TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 pub const SYSTEM_PROMPT: &str = "You are the advisor inside calvin, a local tool that studies how one developer uses \
-Claude Code and GitHub Copilot CLI. You receive calvin's deterministic report about this developer: findings, numbers and evidence. \
+Claude Code, GitHub Copilot CLI and Cursor. You receive calvin's deterministic report about this developer: findings, numbers and evidence. \
 Write a practical improvement plan in Markdown, specific to this person.\n\n\
 Structure:\n\
 1. **This week**: the 3 changes with the biggest effect, in order. For each: what to do, why (cite the numbers), and the expected effect.\n\
@@ -46,9 +47,10 @@ flag), and a concrete way it would help this developer, citing their data. Only 
 5. **Later**: other items worth doing, one line each.\n\n\
 Rules: use only the data provided and never invent numbers; say when data is too thin to conclude; keep it concise; \
 when the report gives an exact setting or command, use it verbatim and never make up settings keys or flags; \
-Tool-specific features must be real and attributed to the correct CLI. Never compare Claude estimated USD with Copilot AI units \
-as if they were the same measure. Prefer shared AGENTS.md guidance for repositories used with both tools; keep CLAUDE.md for \
-Claude-specific guidance and import AGENTS.md with @AGENTS.md when both files are needed.";
+Tool-specific features must be real and attributed to the correct tool. Never compare Claude or Cursor API-list-price estimates \
+with Copilot AI units as if they were the same measure, and never describe Cursor's API estimate as its subscription bill. \
+Prefer shared AGENTS.md guidance for repositories used with multiple tools; keep CLAUDE.md for Claude-specific guidance and \
+import AGENTS.md with @AGENTS.md when both files are needed.";
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct Job {
@@ -97,6 +99,8 @@ pub enum Provider {
     ClaudeCode(ClaudeCodeAdvisor),
     /// GitHub Copilot CLI in non-interactive, web-research-only mode.
     CopilotCli(CopilotCliAdvisor),
+    /// Cursor Agent CLI in read-only ask/print mode.
+    Cursor(CursorAdvisor),
     /// Any command that reads the prompt on stdin and writes Markdown to stdout.
     Command(CommandAdvisor),
 }
@@ -117,6 +121,7 @@ impl Provider {
         match cfg.provider.as_str() {
             "claude-code" => Ok(Provider::ClaudeCode(cfg.claude_code.clone())),
             "copilot-cli" => Ok(Provider::CopilotCli(cfg.copilot_cli.clone())),
+            "cursor" => Ok(Provider::Cursor(cfg.cursor.clone())),
             "command" if !cfg.command.program.trim().is_empty() => {
                 Ok(Provider::Command(cfg.command.clone()))
             }
@@ -129,6 +134,7 @@ impl Provider {
         match self {
             Provider::ClaudeCode(_) => "Claude Code".into(),
             Provider::CopilotCli(_) => "GitHub Copilot CLI".into(),
+            Provider::Cursor(_) => "Cursor Agent CLI".into(),
             Provider::Command(c) if !c.name.trim().is_empty() => c.name.trim().to_string(),
             Provider::Command(c) => c.program.clone(),
         }
@@ -156,6 +162,13 @@ pub fn providers(cfg: &AdvisorConfig) -> Vec<ProviderInfo> {
                 cfg.copilot_cli.model, cfg.copilot_cli.max_ai_credits
             ),
             selected: cfg.provider == "copilot-cli",
+        },
+        ProviderInfo {
+            id: "cursor",
+            name: "Cursor Agent CLI".into(),
+            available: find_program(&cfg.cursor.program).is_some(),
+            detail: format!("{} · read-only ask mode", cfg.cursor.model),
+            selected: cfg.provider == "cursor",
         },
         ProviderInfo {
             id: "command",
@@ -295,6 +308,7 @@ pub fn start(
         let outcome = match &provider {
             Provider::ClaudeCode(settings) => run_claude_code(&job, settings, &prompt),
             Provider::CopilotCli(settings) => run_copilot_cli(&job, settings, &prompt),
+            Provider::Cursor(settings) => run_cursor(&job, settings, &prompt),
             Provider::Command(settings) => run_command(&job, settings, &prompt),
         };
         let mut j = job.lock().unwrap();
@@ -500,6 +514,79 @@ fn run_copilot_cli(
 
 /// Claude Code, kept lean and contained: no tools, MCP servers, skills or hooks, calvin's
 /// own system prompt, nothing saved to session history, and a spending cap.
+fn run_cursor(job: &Arc<Mutex<Job>>, settings: &CursorAdvisor, prompt: &str) -> Result<()> {
+    let program =
+        find_program(&settings.program).unwrap_or_else(|| PathBuf::from(&settings.program));
+    let mut cmd = Command::new(&program);
+    cmd.current_dir(workdir()?)
+        .args(["-p", "--mode", "ask", "--trust", "--output-format", "text"])
+        .args(
+            (!settings.model.trim().is_empty())
+                .then_some(["--model", settings.model.as_str()])
+                .into_iter()
+                .flatten(),
+        )
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    no_window(&mut cmd);
+    let mut child = cmd.spawn().with_context(|| {
+        format!(
+            "couldn't start `{}`. Is the standalone Cursor Agent CLI installed and on your PATH?",
+            settings.program
+        )
+    })?;
+    let input = format!("{SYSTEM_PROMPT}\n\n---\n\n{prompt}");
+    child
+        .stdin
+        .take()
+        .context("no stdin")?
+        .write_all(input.as_bytes())?;
+    {
+        let mut current = job.lock().unwrap();
+        current.model = Some(settings.model.clone());
+        current.step(&format!("Cursor Agent is ready ({})", settings.model));
+        current.step("Sending the report");
+        current.step("Researching the required docs");
+    }
+    let stderr = child.stderr.take();
+    let stderr_text = std::thread::spawn(move || {
+        let mut text = String::new();
+        if let Some(mut stderr) = stderr {
+            let _ = std::io::Read::read_to_string(&mut stderr, &mut text);
+        }
+        text
+    });
+    let deadline = Instant::now() + TIMEOUT;
+    for line in BufReader::new(child.stdout.take().context("no stdout")?).lines() {
+        let line = line?;
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            bail!(
+                "Cursor Agent took longer than {} minutes",
+                TIMEOUT.as_secs() / 60
+            );
+        }
+        let mut current = job.lock().unwrap();
+        current.step("Writing the plan");
+        current.text.push_str(&line);
+        current.text.push('\n');
+    }
+    let status = child.wait()?;
+    let error = stderr_text.join().unwrap_or_default();
+    let mut current = job.lock().unwrap();
+    if !status.success() {
+        current.error = Some(if error.trim().is_empty() {
+            format!("{} exited with {status}", settings.program)
+        } else {
+            error.trim().to_string()
+        });
+    } else if current.text.trim().is_empty() {
+        current.error = Some("Cursor Agent returned nothing".into());
+    }
+    Ok(())
+}
+
 fn run_claude_code(
     job: &Arc<Mutex<Job>>,
     settings: &ClaudeCodeAdvisor,
@@ -714,6 +801,11 @@ mod tests {
             Provider::from_config(&cfg).unwrap(),
             Provider::CopilotCli(_)
         ));
+        cfg.provider = "cursor".into();
+        assert!(matches!(
+            Provider::from_config(&cfg).unwrap(),
+            Provider::Cursor(_)
+        ));
         cfg.provider = "command".into();
         assert!(
             Provider::from_config(&cfg).is_err(),
@@ -726,6 +818,7 @@ mod tests {
         assert!(Provider::from_config(&cfg).is_err());
         let listed = providers(&AdvisorConfig::default());
         assert!(listed.iter().any(|provider| provider.id == "copilot-cli"));
+        assert!(listed.iter().any(|provider| provider.id == "cursor"));
         assert_eq!(listed.iter().filter(|p| p.selected).count(), 1);
     }
 

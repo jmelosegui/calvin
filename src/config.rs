@@ -29,12 +29,13 @@ pub struct Config {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AdvisorConfig {
-    /// `claude-code`, `copilot-cli` or `command`.
+    /// `claude-code`, `copilot-cli`, `cursor` or `command`.
     pub provider: String,
     #[serde(rename = "claude-code")]
     pub claude_code: ClaudeCodeAdvisor,
     #[serde(rename = "copilot-cli")]
     pub copilot_cli: CopilotCliAdvisor,
+    pub cursor: CursorAdvisor,
     pub command: CommandAdvisor,
 }
 
@@ -44,6 +45,7 @@ impl Default for AdvisorConfig {
             provider: "claude-code".into(),
             claude_code: ClaudeCodeAdvisor::default(),
             copilot_cli: CopilotCliAdvisor::default(),
+            cursor: CursorAdvisor::default(),
             command: CommandAdvisor::default(),
         }
     }
@@ -92,6 +94,25 @@ impl Default for CopilotCliAdvisor {
             program: "copilot".into(),
             model: "auto".into(),
             max_ai_credits: 50,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct CursorAdvisor {
+    /// The standalone Cursor Agent CLI executable.
+    pub program: String,
+    pub model: String,
+    pub docs_index: String,
+}
+
+impl Default for CursorAdvisor {
+    fn default() -> Self {
+        Self {
+            program: "agent".into(),
+            model: "auto".into(),
+            docs_index: "https://cursor.com/docs/llms.txt".into(),
         }
     }
 }
@@ -267,11 +288,25 @@ pub fn find_program(program: &str) -> Option<PathBuf> {
     } else {
         &[""]
     };
-    std::env::split_paths(&std::env::var_os("PATH")?).find_map(|dir| {
-        exts.iter()
-            .map(|ext| dir.join(format!("{program}{ext}")))
-            .find(|p| p.is_file())
-    })
+    let on_path = std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path).find_map(|dir| {
+            exts.iter()
+                .map(|ext| dir.join(format!("{program}{ext}")))
+                .find(|p| p.is_file())
+        })
+    });
+    if on_path.is_some() {
+        return on_path;
+    }
+    if cfg!(windows) && matches!(program, "agent" | "cursor-agent") {
+        return std::env::var_os("LOCALAPPDATA").and_then(|local| {
+            let dir = PathBuf::from(local).join("cursor-agent");
+            exts.iter()
+                .map(|ext| dir.join(format!("{program}{ext}")))
+                .find(|p| p.is_file())
+        });
+    }
+    None
 }
 
 pub fn db_path() -> Result<PathBuf> {

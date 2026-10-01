@@ -48,6 +48,79 @@ fn count(conn: &Connection, sql: &str) -> i64 {
 }
 
 #[test]
+fn resumed_sessions_are_recent_activity() {
+    let conn = db::open_in_memory().unwrap();
+    conn.execute_batch(
+        "INSERT INTO sessions (id, harness, started_at, ended_at)
+         VALUES ('cursor:resumed', 'cursor',
+                 '2026-05-01T10:00:00Z', '2026-10-01T10:00:00Z');
+         INSERT INTO prompts (id, session_id, ts, kind, text, is_sidechain)
+         VALUES ('cursor:resumed:turn:0', 'cursor:resumed',
+                 '2026-05-01T10:00:00Z', 'prompt', 'Historical prompt', 0),
+                ('cursor:resumed:turn:1', 'cursor:resumed',
+                 '2026-10-01T10:00:00Z', 'prompt', 'Continue the work', 0);
+         INSERT INTO tool_calls (id, session_id, ts, tool)
+         VALUES ('cursor:resumed:tool:0', 'cursor:resumed',
+                 '2026-05-01T10:00:01Z', 'read_file'),
+                ('cursor:resumed:tool:1', 'cursor:resumed',
+                 '2026-10-01T10:00:01Z', 'read_file');
+         INSERT INTO session_files (session_id, file_path, first_seen_at)
+         VALUES ('cursor:resumed', 'src/old.rs', '2026-05-01T10:00:01Z'),
+                ('cursor:resumed', 'src/recent.rs', '2026-10-01T10:00:01Z');",
+    )
+    .unwrap();
+    let since = Since("2026-09-01T00:00:00Z".into());
+    let sessions = insights::sessions(&conn, &since, 10).unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].id, "cursor:resumed");
+    assert_eq!(insights::summary(&conn, &since).unwrap().sessions, 1);
+    let comparison = &insights::harness_comparison(&conn, &since).unwrap()[0];
+    assert_eq!(comparison.sessions, 1);
+    assert_eq!(comparison.prompts, 1);
+    assert_eq!(comparison.tool_calls, 1);
+    assert_eq!(comparison.files_touched, 1);
+
+    let temp = tempfile::tempdir().unwrap();
+    let cursor_dir = temp.path().join(".cursor");
+    let state_db = temp.path().join("state.vscdb");
+    let prices = PriceTable::bundled();
+    let context = calvin::opportunities::Context {
+        claude_dir: temp.path(),
+        copilot_dir: temp.path(),
+        cursor_dir: &cursor_dir,
+        cursor_state_db: &state_db,
+        prices: &prices,
+        skills: &[],
+    };
+    let opportunities = calvin::opportunities::run(&conn, &since, &context).unwrap();
+    assert!(
+        opportunities
+            .iter()
+            .any(|opportunity| opportunity.id == "cursor-hooks")
+    );
+}
+
+#[test]
+fn cost_groups_tolerate_unavailable_tokens() {
+    let conn = db::open_in_memory().unwrap();
+    conn.execute_batch(
+        "INSERT INTO sessions (id, harness, started_at, ended_at)
+         VALUES ('cursor:missing-usage', 'cursor',
+                 '2026-10-01T10:00:00Z', '2026-10-01T10:01:00Z');
+         INSERT INTO requests
+             (request_id, session_id, ts, model, input_tokens, output_tokens, is_sidechain)
+         VALUES ('cursor:missing-request', 'cursor:missing-usage',
+                 '2026-10-01T10:00:30Z', 'default', NULL, NULL, 0);",
+    )
+    .unwrap();
+    let rows = insights::cost(&conn, &Since::all(), CostBy::Day).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].requests, 1);
+    assert_eq!(rows[0].input_tokens, 0);
+    assert_eq!(rows[0].output_tokens, 0);
+}
+
+#[test]
 fn imports_cursor_sqlite_sessions_and_timeline() {
     let tmp = tempfile::tempdir().unwrap();
     let user_dir = tmp.path().join("Cursor/User");
@@ -192,6 +265,23 @@ fn imports_cursor_sqlite_sessions_and_timeline() {
         ingest_cursor(&mut conn, &state_db, &PriceTable::bundled(), &mut Quiet).unwrap();
     assert_eq!(unchanged.files_read, 0);
     assert_eq!(count(&conn, "SELECT COUNT(*) FROM requests"), 1);
+
+    let prices = PriceTable::bundled();
+    let cursor_dir = tmp.path().join(".cursor");
+    let ctx = calvin::opportunities::Context {
+        claude_dir: tmp.path(),
+        copilot_dir: tmp.path(),
+        cursor_dir: &cursor_dir,
+        cursor_state_db: &state_db,
+        prices: &prices,
+        skills: &[],
+    };
+    let opportunities = calvin::opportunities::run(&conn, &Since::all(), &ctx).unwrap();
+    let ids: Vec<_> = opportunities.iter().map(|item| item.id).collect();
+    assert!(ids.contains(&"cursor-hooks"));
+    assert!(ids.contains(&"cursor-subagents"));
+    assert!(ids.contains(&"cursor-worktrees"));
+    assert!(ids.contains(&"cursor-headless"));
 }
 
 fn copilot_fixture() -> (tempfile::TempDir, PathBuf) {
@@ -367,6 +457,8 @@ fn copilot_inventory_and_recommendations_use_provider_evidence() {
     let ctx = calvin::opportunities::Context {
         claude_dir: tmp.path(),
         copilot_dir: &copilot,
+        cursor_dir: tmp.path(),
+        cursor_state_db: tmp.path(),
         prices: &prices,
         skills: &[],
     };
@@ -656,6 +748,8 @@ fn opportunities_run_on_the_fixture() {
     let ctx = calvin::opportunities::Context {
         claude_dir: &claude,
         copilot_dir: tmp.path(),
+        cursor_dir: tmp.path(),
+        cursor_state_db: tmp.path(),
         prices: &prices,
         skills: &[],
     };

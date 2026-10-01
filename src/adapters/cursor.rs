@@ -94,7 +94,7 @@ pub fn events(
         out.push(Event::ModeChanged {
             id: format!("{session_id}:mode"),
             session_id: session_id.clone(),
-            ts: started,
+            ts: started.clone(),
             mode,
         });
     }
@@ -115,7 +115,7 @@ pub fn events(
         let bubble_id = string(bubble, &["bubbleId", "id"])
             .map(str::to_string)
             .unwrap_or_else(|| position.to_string());
-        let ts = timestamp(bubble, &["createdAt"]).unwrap_or_else(now);
+        let ts = timestamp(bubble, &["createdAt"]).unwrap_or_else(|| started.clone());
         match integer(bubble, &["type"]) {
             Some(1) => {
                 turn_index += 1;
@@ -489,6 +489,38 @@ mod tests {
         assert!(events.iter().any(|event| matches!(
             event,
             Event::AssistantMessage(message) if message.text == "Updated the file."
+        )));
+    }
+
+    #[test]
+    fn missing_bubble_timestamps_use_conversation_start() {
+        let composer = json!({
+            "composerId": "thread-1",
+            "createdAt": 1_700_000_000_000_i64,
+            "lastUpdatedAt": 1_700_000_005_000_i64
+        });
+        let bubbles = vec![
+            json!({
+                "bubbleId": "user-1", "type": 1, "requestId": "request-1",
+                "text": "Historical prompt"
+            }),
+            json!({
+                "bubbleId": "tool-1", "type": 2,
+                "toolFormerData": {
+                    "toolCallId": "call-1", "name": "read_file", "status": "completed"
+                }
+            }),
+        ];
+
+        let events = events(&composer, None, None, &bubbles);
+        let expected = "2023-11-14T22:13:20+00:00";
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Event::Prompt(prompt) if prompt.ts == expected
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Event::ToolCall(tool) if tool.ts == expected
         )));
     }
 }

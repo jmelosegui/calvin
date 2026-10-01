@@ -9,6 +9,9 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
+const CURSOR_CHECKPOINT_VERSION: i64 = 1;
+const CURSOR_CHECKPOINT_SCALE: i64 = 10_000_000_000_000;
+
 use anyhow::{Context, Result};
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
@@ -209,7 +212,9 @@ pub fn ingest_cursor(
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()?;
-    if known.is_some_and(|(_, old_mtime, old_size)| old_mtime == mtime && old_size == size) {
+    if known.is_some_and(|(offset, old_mtime, old_size)| {
+        decode_cursor_checkpoint(offset).is_some() && old_mtime == mtime && old_size == size
+    }) {
         return Ok(stats);
     }
 
@@ -225,7 +230,8 @@ pub fn ingest_cursor(
 
     let checkpoint = known
         .filter(|(_, _, old_size)| *old_size <= size)
-        .map_or(0, |(offset, _, _)| offset);
+        .and_then(|(offset, _, _)| decode_cursor_checkpoint(offset))
+        .unwrap_or(0);
     let headers = cursor_headers(&source)?;
     let mut composers = all_cursor_composers(&source)?;
     if checkpoint > 0 {
@@ -270,7 +276,7 @@ pub fn ingest_cursor(
         source_key,
         cursor::HARNESS,
         size,
-        max_updated,
+        encode_cursor_checkpoint(max_updated),
         mtime
     ])?;
     tx.commit()?;
@@ -279,6 +285,16 @@ pub fn ingest_cursor(
     progress.advance(metadata.len());
     progress.finish();
     Ok(stats)
+}
+
+fn encode_cursor_checkpoint(updated_at: i64) -> i64 {
+    -(CURSOR_CHECKPOINT_VERSION * CURSOR_CHECKPOINT_SCALE + updated_at)
+}
+
+fn decode_cursor_checkpoint(value: i64) -> Option<i64> {
+    let encoded = value.checked_neg()?;
+    (encoded / CURSOR_CHECKPOINT_SCALE == CURSOR_CHECKPOINT_VERSION)
+        .then_some(encoded % CURSOR_CHECKPOINT_SCALE)
 }
 
 fn cursor_headers(source: &Connection) -> Result<HashMap<String, Value>> {
@@ -796,8 +812,13 @@ pub fn write_event(tx: &Transaction, harness: &str, event: &Event) -> Result<()>
         }
         Event::Prompt(p) => {
             tx.prepare_cached(
-                "INSERT OR IGNORE INTO prompts (id, session_id, ts, kind, text, is_sidechain)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO prompts (id, session_id, ts, kind, text, is_sidechain)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(id) DO UPDATE SET
+                     ts = excluded.ts,
+                     kind = excluded.kind,
+                     text = excluded.text,
+                     is_sidechain = excluded.is_sidechain",
             )?
             .execute(params![
                 p.id,
@@ -815,6 +836,7 @@ pub fn write_event(tx: &Transaction, harness: &str, event: &Event) -> Result<()>
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                  ON CONFLICT(id) DO UPDATE SET
                      request_id = COALESCE(excluded.request_id, assistant_messages.request_id),
+                     ts = excluded.ts,
                      text = excluded.text,
                      turn_index = COALESCE(excluded.turn_index, assistant_messages.turn_index)",
             )?
@@ -841,6 +863,7 @@ pub fn write_event(tx: &Transaction, harness: &str, event: &Event) -> Result<()>
                      turn_index, duration_ms)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
                  ON CONFLICT (request_id) DO UPDATE SET
+                     ts = MIN(requests.ts, excluded.ts),
                      input_tokens = CASE WHEN excluded.input_tokens IS NULL THEN requests.input_tokens
                          WHEN requests.input_tokens IS NULL THEN excluded.input_tokens
                          ELSE MAX(requests.input_tokens, excluded.input_tokens) END,
@@ -885,6 +908,7 @@ pub fn write_event(tx: &Transaction, harness: &str, event: &Event) -> Result<()>
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                  ON CONFLICT(id) DO UPDATE SET
                      request_id = COALESCE(tool_calls.request_id, excluded.request_id),
+                     ts = excluded.ts,
                      turn_index = COALESCE(tool_calls.turn_index, excluded.turn_index),
                      input_json = COALESCE(tool_calls.input_json, excluded.input_json)",
             )?
@@ -913,8 +937,13 @@ pub fn write_event(tx: &Transaction, harness: &str, event: &Event) -> Result<()>
             ])?;
             if matches!(r.outcome, Outcome::Rejected | Outcome::Denied) {
                 tx.prepare_cached(
-                    "INSERT OR IGNORE INTO friction (id, session_id, ts, kind, tool, detail)
-                     VALUES (?1, ?2, ?3, ?4, (SELECT tool FROM tool_calls WHERE id = ?1), ?5)",
+                    "INSERT INTO friction (id, session_id, ts, kind, tool, detail)
+                     VALUES (?1, ?2, ?3, ?4, (SELECT tool FROM tool_calls WHERE id = ?1), ?5)
+                     ON CONFLICT(id) DO UPDATE SET
+                         ts = excluded.ts,
+                         kind = excluded.kind,
+                         tool = excluded.tool,
+                         detail = excluded.detail",
                 )?
                 .execute(params![
                     r.tool_use_id,

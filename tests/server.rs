@@ -215,7 +215,8 @@ async fn advisor_preview_requires_docs_for_every_harness() {
     let conn = db::open(&tmp.path().join("calvin.db")).unwrap();
     conn.execute(
         "INSERT INTO sessions (id, harness, started_at)
-         VALUES ('copilot-cli:test', 'copilot-cli', '2026-09-30T12:00:00Z')",
+         VALUES ('copilot-cli:test', 'copilot-cli', '2026-09-30T12:00:00Z'),
+                ('cursor:test', 'cursor', '2026-09-30T12:00:00Z')",
         [],
     )
     .unwrap();
@@ -235,6 +236,7 @@ async fn advisor_preview_requires_docs_for_every_harness() {
     assert!(prompt.contains(
         "https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference"
     ));
+    assert!(prompt.contains("https://cursor.com/docs/llms.txt"));
 }
 
 #[tokio::test]
