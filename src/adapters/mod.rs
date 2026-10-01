@@ -3,3 +3,4 @@
 //! [`Event`]: crate::event::Event
 
 pub mod claude_code;
+pub mod copilot_cli;

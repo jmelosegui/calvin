@@ -7,18 +7,20 @@
 > Named after Dr Susan Calvin, the robopsychologist in Isaac Asimov's *I, Robot*. Her job was
 > working out why a robot behaved the way it did. calvin does the same for you and your agents.
 
-calvin reads the session logs your AI harness already writes to disk (Claude Code first),
+calvin reads the session logs your AI harnesses already write to disk (Claude Code and
+GitHub Copilot CLI),
 loads them into a local SQLite database, and shows you:
 
 - **Prompts you keep typing**, which should become skills or `CLAUDE.md` rules
 - **Skills that never trigger**, and prompts a skill should have caught
 - **Cost and cache hit rate** per day, project and model (estimated at API list price)
 - **Friction**: denied tool calls, interruptions, "no, that's wrong" replies
-- **Opportunities**: Claude Code features and habits you could be using and aren't
+- **Opportunities**: Claude Code and Copilot CLI features and habits you could be using and aren't
 
 ![The calvin dashboard: headline numbers, spend per day, live activity, skill shelf and repeated prompts](assets/dashboard.png)
 
-> **Status:** v0.1.0 is out. Supports Claude Code on Windows, macOS and Linux.
+> **Status:** v0.1.0 is out. The current branch supports Claude Code and GitHub Copilot CLI
+> on Windows, macOS and Linux.
 
 ## The dashboard
 
@@ -27,9 +29,11 @@ loads them into a local SQLite database, and shows you:
   activity across your sessions; a skill shelf; prompts you keep typing; friction; and
   which models did the work and at what effort. Keys: `space` pauses the live feed, `F` is
   full screen, `T` switches light and dark, and `1` `2` `3` pick the period.
-- **Opportunities**: checks your history, Claude Code settings and projects for features
+- **Opportunities**: checks your history, CLI settings and projects for features
   and habits worth adopting, each with what calvin found, why it matters, how to fix it and
-  the evidence. Trends show whether things are improving. **Ask for a plan** has an AI tool
+  the evidence. Cross-tool projects can consolidate shared instructions in `AGENTS.md`, with
+  a small `CLAUDE.md` importing it only when Claude-specific guidance is needed. Trends show
+  whether things are improving. **Ask for a plan** has an AI tool
   of your choice turn the report into a prioritised plan with drafts you can use; earlier
   plans are kept.
 - **Sessions**: browse and read past sessions, jump to the friction points in each (what
@@ -115,9 +119,9 @@ calvin doctor                  # what was detected, where, and log retention war
 
 ```
                                   ┌──────────── calvin start ────────────┐
-~/.claude/projects/**/*.jsonl ─┐  │                                      │
-(more harnesses via adapters) ─┼──► catch up + follow ──► SQLite ──► dashboard ──► 127.0.0.1:1982
-skill folders ─────────────────┘  │                                      │
+~/.claude/projects/**/*.jsonl ───┐ │                                      │
+~/.copilot/session-state + DB ───┼─► catch up + follow ──► SQLite ──► dashboard ──► 127.0.0.1:1982
+skill folders ───────────────────┘ │                                      │
                                   └──────────── calvin stop ─────────────┘
 ```
 
@@ -125,14 +129,16 @@ skill folders ─────────────────┘  │       
 - **Backfill:** your whole history is imported on first run, not just what happens from now on.
 - **No hooks:** new data is picked up by watching the log files, so calvin can't slow down
   or break your sessions.
-- **Adapters:** each harness is a small parser. Claude Code is first; others are welcome.
+- **Adapters:** each harness is a small parser. Claude Code and Copilot CLI ship with calvin;
+  others are welcome.
 
 ## Supported harnesses
 
 | Harness | Status |
 |---|---|
 | Claude Code | supported since v0.1.0 |
-| Codex CLI, Gemini CLI, Copilot CLI, Cursor, Aider | contributions welcome |
+| GitHub Copilot CLI | supported from local session-state and session-store data |
+| Codex CLI, Gemini CLI, Cursor, Aider | contributions welcome |
 
 ## Configuration
 
@@ -141,6 +147,7 @@ Optional. Everything works with defaults. `config.toml` lives in your OS config 
 ```toml
 [paths]
 claude_dir = "~/.claude"          # Claude Code's folder (or set CLAUDE_CONFIG_DIR)
+copilot_dir = "~/.copilot"        # GitHub Copilot CLI's local data folder
 
 [skills]
 extra_paths = ["~/other/skills"]  # more places where skills are installed
@@ -175,8 +182,9 @@ The advisor settings can also be changed from the Opportunities page. `CALVIN_CO
 
 The most useful contribution is a new harness adapter. Adapters ship with **hand-written,
 anonymised fixtures**. Never commit or attach real transcripts, and redact anything you
-paste into an issue. [docs/claude-code-data.md](docs/claude-code-data.md) describes what
-Claude Code writes to disk and what calvin reads. Details in `CONTRIBUTING.md` (coming).
+paste into an issue. [docs/claude-code-data.md](docs/claude-code-data.md) and
+[docs/copilot-cli-data.md](docs/copilot-cli-data.md) describe what each supported CLI writes
+to disk and what calvin reads. Details in `CONTRIBUTING.md` (coming).
 
 ## License
 

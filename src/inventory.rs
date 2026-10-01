@@ -182,6 +182,7 @@ impl Inventory {
         if let Some(v) = &self.harness_version {
             s.push_str(&format!("- {harness} version: {v}\n"));
         }
+
         s.push_str(&format!(
             "- Built-in tools the agent used (calls): {}\n",
             list(&self.builtin_tools)
@@ -213,6 +214,7 @@ impl Inventory {
                 s.push_str(&format!("- Hooks in {file}: {}\n", events.join(", ")));
             }
         }
+
         let rules: Vec<String> = self
             .permission_rules
             .iter()
@@ -252,4 +254,61 @@ impl Inventory {
         ));
         s
     }
+}
+
+pub fn copilot_markdown(conn: &Connection, since: &Since, copilot_dir: &Path) -> Result<String> {
+    let version: Option<String> = conn
+        .query_row(
+            "SELECT cli_version FROM sessions WHERE harness = 'copilot-cli'
+             AND cli_version IS NOT NULL ORDER BY ended_at DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
+    let mut tools = Vec::new();
+    let mut stmt = conn.prepare(
+        "SELECT t.tool, COUNT(*) FROM tool_calls t JOIN sessions s ON s.id = t.session_id
+         WHERE s.harness = 'copilot-cli' AND t.ts >= ?1 GROUP BY t.tool ORDER BY 2 DESC, 1",
+    )?;
+    for row in stmt.query_map([&since.0], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+    })? {
+        tools.push(row?);
+    }
+    let mut commands = BTreeMap::<String, i64>::new();
+    let mut stmt = conn.prepare(
+        "SELECT p.text FROM prompts p JOIN sessions s ON s.id = p.session_id
+         WHERE s.harness = 'copilot-cli' AND p.kind = 'command' AND p.ts >= ?1",
+    )?;
+    for row in stmt.query_map([&since.0], |r| r.get::<_, String>(0))? {
+        let text = row?;
+        let command = text.split_whitespace().next().unwrap_or(&text).to_string();
+        *commands.entry(command).or_default() += 1;
+    }
+    let settings = read_json(&copilot_dir.join("settings.json"));
+    let setting_keys = settings
+        .as_object()
+        .map(|o| o.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    let mut out = String::from("## How you use Copilot CLI today\n");
+    if let Some(version) = version {
+        out.push_str(&format!("- Copilot CLI version: {version}\n"));
+    }
+    out.push_str(&format!("- Tools used (calls): {}\n", list(&tools)));
+    out.push_str(&format!(
+        "- Slash commands typed: {}\n",
+        list(&commands.into_iter().collect::<Vec<_>>())
+    ));
+    out.push_str(&format!(
+        "- Settings in use (keys only): {}\n",
+        if setting_keys.is_empty() {
+            "none".into()
+        } else {
+            setting_keys.join(", ")
+        }
+    ));
+    out.push_str(
+        "- Official documentation: https://docs.github.com/copilot/how-tos/use-copilot-agents/use-copilot-cli\n",
+    );
+    Ok(out)
 }

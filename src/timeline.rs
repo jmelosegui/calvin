@@ -61,6 +61,7 @@ pub struct Turn {
 #[derive(Debug, Serialize)]
 pub struct SessionView {
     pub id: String,
+    pub harness: String,
     pub title: Option<String>,
     pub project: Option<String>,
     pub cwd: Option<String>,
@@ -69,6 +70,7 @@ pub struct SessionView {
     pub ended_at: Option<String>,
     pub turns: Vec<Turn>,
     pub cost_usd: f64,
+    pub ai_units: f64,
     /// Cost of subagents this session started (their conversations aren't shown).
     pub subagent_cost_usd: f64,
 }
@@ -77,12 +79,23 @@ pub struct SessionView {
 pub fn session(conn: &Connection, id: &str) -> Result<Option<SessionView>> {
     let meta = conn
         .query_row(
-            "SELECT title, project, cwd, git_branch, started_at, ended_at FROM sessions WHERE id = ?1",
+            "SELECT harness, title, project, cwd, git_branch, started_at, ended_at
+             FROM sessions WHERE id = ?1",
             [id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                ))
+            },
         )
         .optional()?;
-    let Some((title, project, cwd, git_branch, started_at, ended_at)) = meta else {
+    let Some((harness, title, project, cwd, git_branch, started_at, ended_at)) = meta else {
         return Ok(None);
     };
 
@@ -100,15 +113,23 @@ pub fn session(conn: &Connection, id: &str) -> Result<Option<SessionView>> {
     };
 
     let costs = request_costs(conn, id)?;
-    let turns = group_turns(claude_code::timeline(&records), &costs);
-    let (cost_usd, subagent_cost_usd): (f64, f64) = conn.query_row(
-        "SELECT COALESCE(SUM(cost_usd), 0), COALESCE(SUM(CASE WHEN is_sidechain = 1 THEN cost_usd END), 0)
+    let events = if harness == "claude-code" {
+        claude_code::timeline(&records)
+    } else {
+        normalized_timeline(conn, id)?
+    };
+    let turns = group_turns(events, &costs);
+    let (cost_usd, subagent_cost_usd, ai_units): (f64, f64, f64) = conn.query_row(
+        "SELECT COALESCE(SUM(cost_usd), 0),
+                COALESCE(SUM(CASE WHEN is_sidechain = 1 THEN cost_usd END), 0),
+                COALESCE(SUM(ai_units), 0)
          FROM requests WHERE session_id = ?1",
         [id],
-        |r| Ok((r.get(0)?, r.get(1)?)),
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?;
     Ok(Some(SessionView {
         id: id.to_string(),
+        harness,
         title,
         project,
         cwd,
@@ -117,8 +138,48 @@ pub fn session(conn: &Connection, id: &str) -> Result<Option<SessionView>> {
         ended_at,
         turns,
         cost_usd,
+        ai_units,
         subagent_cost_usd,
     }))
+}
+
+fn normalized_timeline(conn: &Connection, session_id: &str) -> Result<Vec<Event>> {
+    let mut stmt = conn.prepare(
+        "SELECT ts, 0 AS sort, 'prompt' AS type, id, kind, text, NULL, NULL, NULL, NULL
+         FROM prompts WHERE session_id = ?1
+         UNION ALL
+         SELECT ts, 1, 'tool', id, NULL, NULL, tool, input_json, outcome, request_id
+         FROM tool_calls WHERE session_id = ?1
+         ORDER BY ts, sort",
+    )?;
+    let rows = stmt.query_map([session_id], |r| {
+        let event_type: String = r.get(2)?;
+        if event_type == "prompt" {
+            Ok(Event::Prompt {
+                ts: r.get(0)?,
+                kind: match r.get::<_, String>(4)?.as_str() {
+                    "command" => "command",
+                    _ => "prompt",
+                },
+                text: r.get(5)?,
+            })
+        } else {
+            let tool: String = r.get(6)?;
+            let input: Option<String> = r.get(7)?;
+            Ok(Event::Item(Item::Tool {
+                ts: r.get(0)?,
+                id: r.get(3)?,
+                name: tool.clone(),
+                summary: tool,
+                input: preview(input.as_deref().unwrap_or("{}")),
+                outcome: r.get(8)?,
+                result: None,
+                duration_ms: None,
+                request_id: r.get(9)?,
+            }))
+        }
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
 }
 
 /// Every stored line of one log file, in order.

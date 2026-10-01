@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use calvin::db;
-use calvin::ingest::{Quiet, ingest_claude_code};
+use calvin::ingest::{Quiet, ingest_claude_code, ingest_copilot_cli};
 use calvin::insights::{self, CostBy, Since};
 use calvin::prices::PriceTable;
 use rusqlite::Connection;
@@ -44,6 +44,95 @@ fn ingest(conn: &mut Connection, claude: &Path) -> calvin::ingest::Stats {
 
 fn count(conn: &Connection, sql: &str) -> i64 {
     conn.query_row(sql, [], |r| r.get(0)).unwrap()
+}
+
+fn copilot_fixture() -> (tempfile::TempDir, PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/copilot-cli");
+    let dst = tmp.path().join("copilot");
+    copy_dir(&src, &dst);
+    let store = Connection::open(dst.join("session-store.db")).unwrap();
+    store
+        .execute_batch(
+            "CREATE TABLE sessions (
+                 id TEXT PRIMARY KEY, cwd TEXT, repository TEXT, host_type TEXT, branch TEXT,
+                 summary TEXT, created_at TEXT, updated_at TEXT
+             );
+             CREATE TABLE turns (
+                 id INTEGER PRIMARY KEY, session_id TEXT, turn_index INTEGER, user_message TEXT,
+                 assistant_response TEXT, timestamp TEXT
+             );
+             CREATE TABLE assistant_usage_events (
+                 id INTEGER PRIMARY KEY, session_id TEXT, turn_index INTEGER, agent_id TEXT,
+                 parent_tool_call_id TEXT, model TEXT, copilot_usage_model TEXT,
+                 input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER,
+                 cache_write_tokens INTEGER, reasoning_tokens INTEGER, total_nano_aiu INTEGER,
+                 request_multiplier REAL, duration_ms INTEGER, time_to_first_token_ms INTEGER,
+                 output_ttft_ms REAL, inter_token_latency_ms INTEGER, initiator TEXT,
+                 api_endpoint TEXT, reasoning_effort TEXT, finish_reason TEXT,
+                 content_filter_triggered INTEGER, token_details_json TEXT, created_at TEXT
+             );
+             CREATE TABLE session_files (
+                 id INTEGER PRIMARY KEY, session_id TEXT, file_path TEXT, tool_name TEXT,
+                 turn_index INTEGER, first_seen_at TEXT
+             );
+             CREATE TABLE session_refs (
+                 id INTEGER PRIMARY KEY, session_id TEXT, ref_type TEXT, ref_value TEXT,
+                 turn_index INTEGER, created_at TEXT
+             );
+             INSERT INTO sessions VALUES (
+                 '11111111-1111-4111-8111-111111111111', 'C:\\work\\demo', 'demo',
+                 'cli', 'main', 'Improve tests', '2026-09-15 10:00:00', '2026-09-15 10:05:00'
+             );
+             INSERT INTO turns VALUES (
+                 1, '11111111-1111-4111-8111-111111111111', 0,
+                 'run the tests', 'All tests pass.', '2026-09-15 10:00:30'
+             );
+             INSERT INTO assistant_usage_events
+                 (id, session_id, turn_index, model, input_tokens, output_tokens,
+                  cache_read_tokens, cache_write_tokens, total_nano_aiu, duration_ms,
+                  reasoning_effort, created_at)
+             VALUES (
+                 1, '11111111-1111-4111-8111-111111111111', 0, 'gpt-test',
+                 100, 20, 50, 5, 1500000000, 1200, 'high', '2026-09-15 10:00:31'
+             );
+             INSERT INTO session_files VALUES (
+                 1, '11111111-1111-4111-8111-111111111111', 'src/lib.rs',
+                 'apply_patch', 0, '2026-09-15 10:01:00'
+             );
+             INSERT INTO session_refs VALUES (
+                 1, '11111111-1111-4111-8111-111111111111', 'issue', '42',
+                 0, '2026-09-15 10:02:00'
+             );",
+        )
+        .unwrap();
+    (tmp, dst)
+}
+
+#[test]
+fn imports_copilot_cli_store_and_events() {
+    let (_tmp, copilot) = copilot_fixture();
+    let mut conn = db::open_in_memory().unwrap();
+    let stats = ingest_copilot_cli(&mut conn, &copilot, &mut Quiet).unwrap();
+    assert_eq!((stats.files_read, stats.lines), (1, 3));
+    assert_eq!(
+        count(
+            &conn,
+            "SELECT COUNT(*) FROM sessions WHERE harness = 'copilot-cli'"
+        ),
+        1
+    );
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM prompts"), 1);
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM tool_calls"), 1);
+    let (tokens, ai_units): (i64, f64) = conn
+        .query_row("SELECT output_tokens, ai_units FROM requests", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    assert_eq!(tokens, 20);
+    assert!((ai_units - 1.5).abs() < f64::EPSILON);
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM session_files"), 1);
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM session_refs"), 1);
 }
 
 #[test]

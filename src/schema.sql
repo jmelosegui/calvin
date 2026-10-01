@@ -59,6 +59,8 @@ CREATE TABLE IF NOT EXISTS requests (
     cache_write_1h INTEGER,
     effort         TEXT,
     cost_usd       REAL,
+    ai_units       REAL,
+    duration_ms    INTEGER,
     skill          TEXT,
     is_sidechain   INTEGER NOT NULL DEFAULT 0
 );
@@ -96,6 +98,25 @@ CREATE INDEX IF NOT EXISTS requests_session ON requests (session_id);
 CREATE INDEX IF NOT EXISTS tool_calls_session ON tool_calls (session_id);
 CREATE INDEX IF NOT EXISTS friction_session ON friction (session_id);
 CREATE INDEX IF NOT EXISTS sessions_started ON sessions (started_at);
+
+-- Provider-neutral session artifacts. Copilot CLI currently supplies these directly;
+-- other adapters can leave them empty.
+CREATE TABLE IF NOT EXISTS session_files (
+    session_id    TEXT NOT NULL,
+    file_path     TEXT NOT NULL,
+    tool_name     TEXT,
+    turn_index    INTEGER,
+    first_seen_at TEXT,
+    PRIMARY KEY (session_id, file_path)
+);
+CREATE TABLE IF NOT EXISTS session_refs (
+    session_id TEXT NOT NULL,
+    ref_type   TEXT NOT NULL,
+    ref_value  TEXT NOT NULL,
+    turn_index INTEGER,
+    created_at TEXT,
+    PRIMARY KEY (session_id, ref_type, ref_value)
+);
 
 -- One row per opportunity check per day, so fixes show up as trends.
 CREATE TABLE IF NOT EXISTS opportunity_snapshots (

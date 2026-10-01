@@ -8,6 +8,7 @@ use crate::config::{self, Config};
 pub fn run(cfg: &Config, conn: &Connection) -> Result<()> {
     let db = config::db_path()?;
     let claude = cfg.claude_dir()?;
+    let copilot = cfg.copilot_dir()?;
     println!("Database      {}", db.display());
     if let Ok(meta) = std::fs::metadata(&db) {
         println!("              {:.1} MB", meta.len() as f64 / 1e6);
@@ -74,9 +75,30 @@ pub fn run(cfg: &Config, conn: &Connection) -> Result<()> {
         println!("Claude Code   not found at {}", projects.display());
     }
 
+    let copilot_store = copilot.join("session-store.db");
+    let copilot_events = copilot.join("session-state");
+    if copilot_store.is_file() || copilot_events.is_dir() {
+        let (sessions, files, requests): (i64, i64, i64) = conn.query_row(
+            "SELECT
+                 (SELECT COUNT(*) FROM sessions WHERE harness = 'copilot-cli'),
+                 (SELECT COUNT(*) FROM files WHERE harness = 'copilot-cli'),
+                 (SELECT COUNT(*) FROM requests r JOIN sessions s ON s.id = r.session_id
+                  WHERE s.harness = 'copilot-cli')",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
+        println!();
+        println!("Copilot CLI   {}", copilot.display());
+        println!("              {sessions} sessions, {files} event logs, {requests} usage records");
+    } else {
+        println!();
+        println!("Copilot CLI   not found at {}", copilot.display());
+    }
+
     let unpriced: Vec<String> = conn
         .prepare(
-            "SELECT DISTINCT model FROM requests WHERE cost_usd IS NULL AND model IS NOT NULL",
+            "SELECT DISTINCT r.model FROM requests r JOIN sessions s ON s.id = r.session_id
+             WHERE r.cost_usd IS NULL AND r.model IS NOT NULL AND s.harness = 'claude-code'",
         )?
         .query_map([], |r| r.get(0))?
         .collect::<Result<_, _>>()?;

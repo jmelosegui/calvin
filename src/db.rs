@@ -11,7 +11,8 @@ const SCHEMA: &str = include_str!("schema.sql");
 ///   into it and dropped.
 /// - 3: background-task notifications are no longer prompts; remove the ones imported as such.
 /// - 4: `requests.effort`, backfilled from the raw lines.
-pub const SCHEMA_VERSION: i64 = 4;
+/// - 5: Copilot CLI usage fields (`ai_units`, `duration_ms`).
+pub const SCHEMA_VERSION: i64 = 5;
 
 /// Lines per compressed block when migrating old rows.
 const MIGRATION_CHUNK_BYTES: usize = 4 * 1024 * 1024;
@@ -53,6 +54,12 @@ fn init(conn: &Connection) -> Result<()> {
     // Columns added after a table was first created; CREATE TABLE IF NOT EXISTS won't add them.
     if table_exists(conn, "requests")? && !column_exists(conn, "requests", "effort")? {
         conn.execute_batch("ALTER TABLE requests ADD COLUMN effort TEXT")?;
+    }
+    if table_exists(conn, "requests")? && !column_exists(conn, "requests", "ai_units")? {
+        conn.execute_batch(
+            "ALTER TABLE requests ADD COLUMN ai_units REAL;
+             ALTER TABLE requests ADD COLUMN duration_ms INTEGER;",
+        )?;
     }
     conn.execute_batch(SCHEMA)?;
     if table_exists(conn, "raw_lines")? {

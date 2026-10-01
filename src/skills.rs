@@ -35,12 +35,15 @@ pub struct InstalledSkill {
     /// Where it came from, if recorded (e.g. "from the vercel-labs/skills repo").
     pub detail: Option<String>,
     pub path: String,
+    /// Coding tools that can discover this installed copy.
+    pub providers: Vec<String>,
 }
 
 /// Where to look.
 #[derive(Debug, Default, Clone)]
 pub struct Locations {
     pub claude_dir: PathBuf,
+    pub copilot_dir: PathBuf,
     pub project_dirs: Vec<PathBuf>,
     pub extra: Vec<PathBuf>,
 }
@@ -49,10 +52,19 @@ pub fn installed(loc: &Locations) -> Vec<InstalledSkill> {
     let lock = install_lock(&loc.claude_dir);
     let mut found: BTreeMap<String, InstalledSkill> = BTreeMap::new();
     let mut add = |skill: InstalledSkill| {
-        found.entry(skill.name.clone()).or_insert(skill);
+        if let Some(existing) = found.get_mut(&skill.name) {
+            for provider in skill.providers {
+                if !existing.providers.contains(&provider) {
+                    existing.providers.push(provider);
+                }
+            }
+            existing.providers.sort();
+        } else {
+            found.insert(skill.name.clone(), skill);
+        }
     };
 
-    for mut skill in scan(&loc.claude_dir.join("skills"), 2, "global") {
+    for mut skill in scan(&loc.claude_dir.join("skills"), 2, "global", "claude-code") {
         classify_global(&mut skill, &lock);
         add(skill);
     }
@@ -85,8 +97,13 @@ pub fn installed(loc: &Locations) -> Vec<InstalledSkill> {
             && let Some(mut skill) = read_skill(entry.path(), "plugin", Some(&rel[1]))
         {
             skill.detail = Some(format!("the {} plugin ({} marketplace)", rel[1], rel[0]));
+            skill.providers = vec!["claude-code".into()];
             add(skill);
         }
+    }
+
+    for skill in scan(&loc.copilot_dir.join("skills"), 2, "global", "copilot-cli") {
+        add(skill);
     }
 
     for dir in project_roots(&loc.project_dirs) {
@@ -94,14 +111,29 @@ pub fn installed(loc: &Locations) -> Vec<InstalledSkill> {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        for mut skill in scan(&dir.join(".claude").join("skills"), 2, "project") {
+        for mut skill in scan(
+            &dir.join(".claude").join("skills"),
+            2,
+            "project",
+            "claude-code",
+        ) {
+            skill.detail = Some(format!("in the {project} repository"));
+            add(skill);
+        }
+        for mut skill in scan(
+            &dir.join(".github").join("skills"),
+            2,
+            "project",
+            "copilot-cli",
+        ) {
             skill.detail = Some(format!("in the {project} repository"));
             add(skill);
         }
     }
     for dir in &loc.extra {
-        for mut skill in scan(dir, 3, "global") {
+        for mut skill in scan(dir, 3, "global", "shared") {
             classify_global(&mut skill, &lock);
+            skill.providers = vec!["claude-code".into(), "copilot-cli".into()];
             add(skill);
         }
     }
@@ -211,6 +243,7 @@ fn synced(root: &Path) -> Vec<InstalledSkill> {
                 kind: "global".into(),
                 detail: Some(by.into()),
                 path: skill_md.to_string_lossy().to_string(),
+                providers: vec!["claude-code".into()],
             });
         }
     }
@@ -219,7 +252,7 @@ fn synced(root: &Path) -> Vec<InstalledSkill> {
 
 /// SKILL.md files up to `depth` levels below `root`, skipping hidden folders and the
 /// claude.ai `synced` folder (handled separately).
-fn scan(root: &Path, depth: usize, kind: &str) -> Vec<InstalledSkill> {
+fn scan(root: &Path, depth: usize, kind: &str, provider: &str) -> Vec<InstalledSkill> {
     if !root.is_dir() {
         return Vec::new();
     }
@@ -235,7 +268,11 @@ fn scan(root: &Path, depth: usize, kind: &str) -> Vec<InstalledSkill> {
         })
         .filter_map(Result::ok)
         .filter(|e| e.file_name() == "SKILL.md")
-        .filter_map(|e| read_skill(e.path(), kind, None))
+        .filter_map(|e| {
+            let mut skill = read_skill(e.path(), kind, None)?;
+            skill.providers = vec![provider.to_string()];
+            Some(skill)
+        })
         .collect()
 }
 
@@ -258,6 +295,7 @@ fn read_skill(path: &Path, kind: &str, plugin: Option<&str>) -> Option<Installed
         kind: kind.to_string(),
         detail: None,
         path: path.to_string_lossy().to_string(),
+        providers: Vec::new(),
     })
 }
 
@@ -354,6 +392,15 @@ mod tests {
             project.join(".claude/skills/local/SKILL.md"),
             "no front matter",
         );
+        write(
+            project.join(".github/skills/copilot-project/SKILL.md"),
+            &skill("copilot-project"),
+        );
+        let copilot = tmp.path().join("copilot");
+        write(
+            copilot.join("skills/copilot-global/SKILL.md"),
+            &skill("copilot-global"),
+        );
         std::fs::create_dir_all(project.join(".git")).unwrap();
         // The session started in a subfolder; the skill is at the repository root.
         let session_dir = project.join("src/app");
@@ -361,10 +408,20 @@ mod tests {
 
         let loc = Locations {
             claude_dir: claude,
+            copilot_dir: copilot,
             project_dirs: vec![session_dir],
             extra: vec![],
         };
-        let got: Vec<_> = installed(&loc)
+        let installed = installed(&loc);
+        assert_eq!(
+            installed
+                .iter()
+                .find(|s| s.name == "copilot-project")
+                .unwrap()
+                .providers,
+            vec!["copilot-cli"]
+        );
+        let got: Vec<_> = installed
             .into_iter()
             .map(|s| (s.name, s.kind, s.detail.is_some()))
             .collect();
@@ -373,6 +430,8 @@ mod tests {
             vec![
                 ("anthropic-skills:pdf".into(), "global".into(), true),
                 ("aspire".into(), "global".into(), false),
+                ("copilot-global".into(), "global".into(), false),
+                ("copilot-project".into(), "project".into(), true),
                 ("datadog:ddviz".into(), "plugin".into(), true),
                 ("find-skills".into(), "global".into(), true),
                 ("local".into(), "project".into(), true),

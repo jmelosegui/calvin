@@ -169,6 +169,7 @@ pub fn run_foreground(cfg: &Config) -> Result<()> {
                 crate::update::enabled(cfg.updates.check),
                 db_path,
                 cfg.claude_dir()?,
+                cfg.copilot_dir()?,
                 cfg.skill_folders(),
                 cfg.price_table(),
                 token.clone(),
