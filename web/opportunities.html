@@ -125,7 +125,7 @@
     .past button { display: block; width: 100%; text-align: left; padding: 7px 0; border: 0; border-bottom: 1px dashed var(--line-dim); background: none; color: var(--text); font: 500 13px "Outfit", sans-serif; cursor: pointer; }
     .past button:hover { color: var(--orange-ink); }
     .past button span { color: var(--muted); margin-left: 8px; font-size: 12px; }
-    .past button::before { content: "B8"; display: inline-block; width: 16px; color: var(--faint); transition: transform 0.15s; }
+    .past button::before { content: ""; display: inline-block; width: 0; height: 0; margin: 0 8px 0 2px; border-top: 4px solid transparent; border-bottom: 4px solid transparent; border-left: 6px solid currentColor; color: var(--faint); transform-origin: 3px 4px; transition: transform 0.15s; }
     .past button.expanded::before { transform: rotate(90deg); color: var(--orange); }
     .past button.expanded { color: var(--orange-ink); }
     .pastplan { margin: 0 0 12px; padding: 12px 16px 4px 16px; border-left: 2px solid var(--orange); background: var(--btn); border-radius: 0 8px 8px 0; }
