@@ -100,6 +100,9 @@
     .custom .wide { flex: 1; }
     .adv-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
     .adv-note { color: var(--muted); font-size: 13px; }
+    .adv-note a { color: var(--orange-ink); font-weight: 600; text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--orange) 55%, transparent); text-underline-offset: 3px; }
+    .adv-note a:hover, .adv-note a:focus-visible { color: var(--orange); text-decoration-color: currentColor; }
+    .adv-note a:focus-visible { outline: 1px solid var(--orange); outline-offset: 3px; border-radius: 2px; }
     .btn:disabled { opacity: 0.5; cursor: default; }
     .progress { display: none; margin-top: 16px; padding: 12px 14px; border: 1px dashed var(--line-dim); border-radius: 10px; }
     .progress.show { display: block; }
