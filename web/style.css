@@ -117,6 +117,11 @@ main { display: grid; grid-template-columns: repeat(12, 1fr); gap: 18px; max-wid
 @media (max-width: 1050px) { .span-8, .span-7, .span-6, .span-5, .span-4 { grid-column: span 12; } }
 .panel h2 { margin: 0 0 4px; font-size: 18px; font-weight: 600; }
 .panel .sub { margin: 0 0 16px; font-size: 13px; color: var(--muted); }
+.billing-legend { display: flex; flex-wrap: wrap; gap: 10px 18px; margin: -6px 0 12px; color: var(--muted); font-size: 12px; }
+.billing-legend span { display: inline-flex; align-items: center; gap: 7px; }
+.billing-legend i { width: 9px; height: 9px; border-radius: 3px; }
+.billing-legend .claude-code i { background: var(--claude); }
+.billing-legend .copilot-cli i { background: var(--copilot); }
 .empty { padding: 24px 0; color: var(--muted); font-size: 14px; }
 .eyebrow { font-size: 11px; font-weight: 500; letter-spacing: 0.24em; text-transform: uppercase; color: var(--muted); }
 

@@ -136,9 +136,9 @@ async fn daily_billing_keeps_copilot_ai_units_separate() {
     .unwrap();
     conn.execute(
         "INSERT INTO requests
-         (request_id, session_id, ts, input_tokens, output_tokens, cache_read,
+         (request_id, session_id, ts, model, input_tokens, output_tokens, cache_read,
           cache_write_5m, cache_write_1h, ai_units)
-         VALUES ('copilot-billing', 'copilot-cli:billing', '2026-09-30T12:01:00Z',
+         VALUES ('copilot-billing', 'copilot-cli:billing', '2026-09-30T12:01:00Z', 'gpt-test',
                  0, 0, 0, 0, 0, 2.5)",
         [],
     )
@@ -146,6 +146,7 @@ async fn daily_billing_keeps_copilot_ai_units_separate() {
     drop(conn);
 
     let res = app
+        .clone()
         .oneshot(get(
             "/api/cost?by=day&since=all&harness=copilot-cli",
             "127.0.0.1:1982",
@@ -157,6 +158,19 @@ async fn daily_billing_keeps_copilot_ai_units_separate() {
     let rows: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(rows[0]["cost_usd"], 0.0);
     assert_eq!(rows[0]["ai_units"], 2.5);
+
+    let res = app
+        .oneshot(get(
+            "/api/models?since=all&harness=copilot-cli",
+            "127.0.0.1:1982",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let models: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(models[0]["model"], "gpt-test");
+    assert_eq!(models[0]["ai_units"], 2.5);
 }
 
 #[tokio::test]

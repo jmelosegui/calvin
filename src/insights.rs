@@ -593,6 +593,7 @@ pub struct ModelRow {
     pub cache_read: i64,
     pub cache_write: i64,
     pub cost_usd: f64,
+    pub ai_units: f64,
     pub cache_hit_rate: Option<f64>,
     /// Requests and cost per effort level, most used first. `effort` is `None` where
     /// the model or harness doesn't record one.
@@ -604,6 +605,7 @@ pub struct EffortShare {
     pub effort: Option<String>,
     pub requests: i64,
     pub cost_usd: f64,
+    pub ai_units: f64,
 }
 
 /// Usage per model, most expensive first.
@@ -613,9 +615,10 @@ pub fn models(conn: &Connection, since: &Since) -> Result<Vec<ModelRow>> {
             "SELECT model, COUNT(*), COALESCE(SUM(is_sidechain), 0), COUNT(DISTINCT session_id),
                     COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
                     COALESCE(SUM(cache_read), 0), COALESCE(SUM(cache_write_5m + cache_write_1h), 0),
-                    COALESCE(SUM(cost_usd), 0)
+                    COALESCE(SUM(cost_usd), 0) AS cost_usd,
+                    COALESCE(SUM(ai_units), 0) AS ai_units
              FROM requests WHERE ts >= ?1 AND model IS NOT NULL
-             GROUP BY model ORDER BY 9 DESC, 2 DESC",
+             GROUP BY model ORDER BY (cost_usd + ai_units * 0.01) DESC, 2 DESC",
         )?
         .query_map([&since.0], |r| {
             let input: i64 = r.get(4)?;
@@ -631,6 +634,7 @@ pub fn models(conn: &Connection, since: &Since) -> Result<Vec<ModelRow>> {
                 cache_read: read,
                 cache_write: write,
                 cost_usd: r.get(8)?,
+                ai_units: r.get(9)?,
                 cache_hit_rate: ratio(Some(read), Some(read + write + input)),
                 efforts: Vec::new(),
             })
@@ -638,7 +642,8 @@ pub fn models(conn: &Connection, since: &Since) -> Result<Vec<ModelRow>> {
         .collect::<Result<Vec<_>, _>>()?;
     let mut rows = rows;
     let mut stmt = conn.prepare(
-        "SELECT model, effort, COUNT(*), COALESCE(SUM(cost_usd), 0) FROM requests
+        "SELECT model, effort, COUNT(*), COALESCE(SUM(cost_usd), 0),
+                COALESCE(SUM(ai_units), 0) FROM requests
          WHERE ts >= ?1 AND model IS NOT NULL GROUP BY model, effort ORDER BY 3 DESC",
     )?;
     let mut shares = stmt.query([&since.0])?;
@@ -649,6 +654,7 @@ pub fn models(conn: &Connection, since: &Since) -> Result<Vec<ModelRow>> {
                 effort: r.get(1)?,
                 requests: r.get(2)?,
                 cost_usd: r.get(3)?,
+                ai_units: r.get(4)?,
             });
         }
     }

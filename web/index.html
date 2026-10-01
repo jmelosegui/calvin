@@ -54,6 +54,7 @@
     <section class="panel span-8" id="costPanel">
       <h2 id="costTitle">Billing usage per day</h2>
       <p class="sub" id="costNote">Claude estimated USD and Copilot-reported AI units use separate axes. Hover a bar for the day.</p>
+      <div class="billing-legend" id="costLegend"></div>
       <svg id="costChart" viewBox="0 0 900 330"></svg>
     </section>
 
@@ -77,8 +78,8 @@
     </section>
 
     <section class="panel span-6">
-      <h2>Spend by project</h2>
-      <p class="sub">Where the tokens go.</p>
+      <h2 id="projectTitle">Billing value by project</h2>
+      <p class="sub" id="projectNote">Where the estimated or equivalent USD goes.</p>
       <div class="hbars" id="projects"></div>
     </section>
 
@@ -90,7 +91,7 @@
 
     <section class="panel">
       <h2>Models</h2>
-      <p class="sub">Which models did the work, and what each cost. Subagents often do simpler work that a cheaper model can handle.</p>
+      <p class="sub" id="modelsNote">Which models did the work and their estimated or equivalent USD value.</p>
       <div class="hbars" id="models"></div>
       <p class="never" id="modelnote"></p>
     </section>
@@ -112,6 +113,9 @@
     // Log content is untrusted: always escape before putting it in HTML.
     const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
     const money = (v) => "$" + (v >= 100 ? v.toFixed(0) : v.toFixed(2));
+    const AI_CREDIT_USD = 0.01;
+    const aiCreditUsd = (credits) => credits * AI_CREDIT_USD;
+    const approxAiUsd = (credits) => `~${money(aiCreditUsd(credits))}`;
     const num = (n) => (n ?? 0).toLocaleString();
     const tok = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n));
     const fmtDate = (d) => d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
@@ -141,12 +145,15 @@
       const used = installed.filter((k) => k.model_runs + k.command_runs > 0).length;
       const cache = s.cache_hit_rate == null ? "–" : (s.cache_hit_rate * 100).toFixed(0) + "<small>%</small>";
       const copilotOnly = selectedHarness() === "copilot-cli";
+      const claudeOnly = selectedHarness() === "claude-code";
       $("#kpis").innerHTML = [
         ["Sessions", num(s.sessions), `${num(s.requests)} model requests`],
         ["Prompts", num(s.prompts), `plus ${num(s.commands)} slash commands`],
         copilotOnly
-          ? ["AI units", s.ai_units.toFixed(2), "reported by Copilot CLI"]
-          : ["Est. cost", money(s.cost_usd), "Claude API list-price estimate"],
+          ? ["AI units", s.ai_units.toFixed(2), `${approxAiUsd(s.ai_units)} overage equivalent · 1 AIU = $0.01`]
+          : claudeOnly
+            ? ["Est. cost", money(s.cost_usd), "Claude API list-price estimate"]
+            : ["Billing value", `~${money(s.cost_usd + aiCreditUsd(s.ai_units))}`, `${money(s.cost_usd)} Claude estimate + ${approxAiUsd(s.ai_units)} Copilot equivalent`],
         copilotOnly
           ? ["Cache hit rate", "–", "not comparable with Claude cache data"]
           : ["Cache hit rate", cache, "Claude input served from cache"],
@@ -191,7 +198,7 @@
         const share = totalSessions ? Math.round((r.sessions / totalSessions) * 100) : 0;
         const billing = r.harness === "claude-code"
           ? `${money(r.cost_usd ?? 0)} estimated cost`
-          : r.ai_units == null ? "billing unavailable" : `${r.ai_units.toFixed(2)} AI units`;
+          : r.ai_units == null ? "billing unavailable" : `${r.ai_units.toFixed(2)} AI units · ${approxAiUsd(r.ai_units)} overage equivalent`;
         return `<div class="mix-legend"><i style="background:${color(r.harness, i)}"></i><span><b>${esc(name(r.harness))}</b><small>${num(r.sessions)} sessions · ${share}% · ${esc(billing)}</small></span></div>`;
       }).join("");
       $("#comparison").innerHTML = `<div class="compare-grid">
@@ -214,8 +221,12 @@
       $("#costNote").textContent = harness === "claude-code"
         ? "Estimated from token counts at API list price. Hover a bar for the day."
         : harness === "copilot-cli"
-          ? "AI units reported by Copilot CLI. Hover a bar for the day."
-          : "Claude estimated USD (orange, left axis) and Copilot-reported AI units (blue, right axis) remain separate.";
+          ? "AI units reported by Copilot CLI, with their approximate USD overage value. Hover a bar for the day."
+          : "Claude estimated USD and Copilot-reported AI units remain separate; Copilot's approximate USD value is shown in tooltips.";
+      $("#costLegend").innerHTML = [
+        showClaude ? `<span class="claude-code"><i></i>Claude: estimated API list-price USD</span>` : "",
+        showCopilot ? `<span class="copilot-cli"><i></i>Copilot: 1 AI credit = $0.01 USD overage value (included credits may mean $0 billed)</span>` : "",
+      ].join("");
       const byDay = new Map(rows.map((r) => [r.key, r]));
       const days = [];
       for (let i = range - 1; i >= 0; i--) {
@@ -264,7 +275,10 @@
         const baseX = L + i * slot + (slot - (bw * series + gap * (series - 1))) / 2;
         const hit = el("rect", { x: L + i * slot, y: T, width: slot, height: ph, class: "hit" });
         hit.addEventListener("mousemove", (e) => {
-          const billing = [showClaude ? money(d.cost) + " Claude estimate" : "", showCopilot ? d.units.toFixed(2) + " Copilot AIU" : ""].filter(Boolean).join("<br>");
+          const billing = [
+            showClaude ? money(d.cost) + " Claude estimate" : "",
+            showCopilot ? `${d.units.toFixed(2)} Copilot AIU · ${approxAiUsd(d.units)} overage equivalent` : "",
+          ].filter(Boolean).join("<br>");
           showTip(e, `<b>${fmtDate(d.d)}</b><br>${billing}<br><span class="m">${d.sessions} sessions · ${num(d.requests)} model requests</span>`);
         });
         hit.addEventListener("mouseleave", hideTip);
@@ -386,7 +400,8 @@
       const sorted = [...known].sort((a, b) => EFFORT_ORDER.indexOf(a.effort) - EFFORT_ORDER.indexOf(b.effort));
       return `<span class="effort-label">Effort</span>` + sorted.map((e) => {
         const pct = Math.round((e.requests / r.requests) * 100);
-        return `<span class="effort" title="${num(e.requests)} requests · ${money(e.cost_usd)}">${esc(e.effort)} <b>${pct}%</b></span>`;
+        const value = e.cost_usd + aiCreditUsd(e.ai_units ?? 0);
+        return `<span class="effort" title="${num(e.requests)} requests · ${e.ai_units ? approxAiUsd(e.ai_units) + " equivalent" : money(value)}">${esc(e.effort)} <b>${pct}%</b></span>`;
       }).join("");
     }
 
@@ -396,20 +411,30 @@
         $("#modelnote").textContent = "";
         return;
       }
-      const max = Math.max(...rows.map((r) => r.cost_usd), 1e-9);
-      const total = rows.reduce((t, r) => t + r.cost_usd, 0);
+      const billingValue = (r) => r.cost_usd + aiCreditUsd(r.ai_units ?? 0);
+      rows = [...rows].sort((a, b) => billingValue(b) - billingValue(a));
+      const max = Math.max(...rows.map(billingValue), 1e-9);
+      const total = rows.reduce((t, r) => t + billingValue(r), 0);
       const requests = rows.reduce((t, r) => t + r.requests, 0);
+      const copilotOnly = selectedHarness() === "copilot-cli";
+      $("#modelsNote").textContent = copilotOnly
+        ? "Which models did the work. USD values approximate Copilot overage pricing at 1 AI credit = $0.01."
+        : "Which models did the work and their estimated or equivalent USD value. Subagents often do simpler work that a cheaper model can handle.";
       $("#models").innerHTML = rows.map((r, i) => {
-        const share = total ? Math.round((r.cost_usd / total) * 100) : 0;
+        const value = billingValue(r);
+        const share = total ? Math.round((value / total) * 100) : 0;
         const sub = r.subagent_requests ? ` (${Math.round((r.subagent_requests / r.requests) * 100)}% by subagents)` : "";
         const cache = r.cache_hit_rate == null ? "" : ` · ${Math.round(r.cache_hit_rate * 100)}% cache hits`;
+        const displayValue = r.ai_units
+          ? `${approxAiUsd(r.ai_units)}${r.cost_usd ? ` + ${money(r.cost_usd)}` : ""}`
+          : money(r.cost_usd);
         return `
           <div class="hbar">
-            <div class="name ${i ? "dim" : ""}" title="${esc(r.model)}">${esc(modelName(r.model))} <span style="color:var(--faint);font-weight:500">· ${share}% of spend</span></div>
+            <div class="name ${i ? "dim" : ""}" title="${esc(r.model)}">${esc(modelName(r.model))} <span style="color:var(--faint);font-weight:500">· ${share}% of billing value</span></div>
             <div class="row">
-              <div class="box ${i ? "" : "hot"}" style="width:${(r.cost_usd / max) * 55}%"></div>
+              <div class="box ${i ? "" : "hot"}" style="width:${(value / max) * 55}%"></div>
               <div class="track"></div>
-              <div class="val">${money(r.cost_usd)}</div>
+              <div class="val">${displayValue}</div>
             </div>
             <div class="sub" style="margin:4px 0 0">${num(r.requests)} requests${sub} · ${tok(r.output_tokens)} output tokens · ${num(r.sessions)} session${r.sessions === 1 ? "" : "s"}${cache}</div>
             <div class="efforts">${effortMix(r)}</div>
@@ -451,7 +476,12 @@
         renderCost(cost);
         renderShelf(skills);
         renderPrompts(prompts);
-        hbars("#projects", projects.slice(0, 6).map((r) => [r.key, r.cost_usd]), money, "No spend in this period.");
+        const projectValue = (r) => r.cost_usd + aiCreditUsd(r.ai_units ?? 0);
+        $("#projectTitle").textContent = harness === "copilot-cli" ? "Copilot value by project" : "Billing value by project";
+        $("#projectNote").textContent = harness === "copilot-cli"
+          ? "Approximate USD overage value at 1 AI credit = $0.01."
+          : "Claude estimated cost plus Copilot's approximate USD overage value.";
+        hbars("#projects", projects.slice(0, 6).map((r) => [r.key, projectValue(r)]), harness === "claude-code" ? money : (v) => `~${money(v)}`, "No billing usage in this period.");
         renderFriction(friction);
         renderModels(models);
       } catch (e) {
