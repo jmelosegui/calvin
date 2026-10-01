@@ -12,6 +12,12 @@
       background: transparent; color: var(--text); font: 500 14px "Outfit", sans-serif;
     }
     .search:focus { outline: none; border-color: var(--orange); }
+    .scope-picker { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; white-space: nowrap; }
+    .scope-picker select {
+      padding: 8px 10px; border: 1.5px solid var(--line-dim); border-radius: 8px;
+      background: var(--bg); color: var(--text); font: 500 13px "Outfit", sans-serif;
+    }
+    .scope-picker select:focus { outline: none; border-color: var(--orange); }
     .origin { margin-top: 4px; color: var(--muted); font-size: 13px; }
 
     .list { display: grid; gap: 0; }
@@ -90,11 +96,13 @@
     <h1>Skill <span class="px">LIBRARY</span></h1>
     <div class="actions">
       <input class="search" id="q" type="search" placeholder="Search skills  ( / )" autocomplete="off" />
-      <div class="seg" id="provider-filter">
-        <button data-provider="" class="active">All CLIs</button>
-        <button data-provider="claude-code">Claude Code</button>
-        <button data-provider="copilot-cli">Copilot CLI</button>
-      </div>
+      <label class="scope-picker">Skills for
+        <select id="provider-filter">
+          <option value="">All tools</option>
+          <option value="claude-code">Claude Code</option>
+          <option value="copilot-cli">Copilot CLI</option>
+        </select>
+      </label>
       <div class="seg" id="source">
         <button data-source="" class="active">All</button>
         <button data-source="global">Global</button>
@@ -304,12 +312,10 @@
         document.querySelectorAll("#source button").forEach((x) => x.classList.toggle("active", x === b));
         renderList();
       }));
-    document.querySelectorAll("#provider-filter button").forEach((b) =>
-      b.addEventListener("click", () => {
-        provider = b.dataset.provider;
-        document.querySelectorAll("#provider-filter button").forEach((x) => x.classList.toggle("active", x === b));
-        renderList();
-      }));
+    $("#provider-filter").onchange = (event) => {
+      provider = event.target.value;
+      renderList();
+    };
     $("#pack").onclick = () => pack([...selected]);
     $("#clear").onclick = () => {
       selected.clear();
