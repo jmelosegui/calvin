@@ -54,8 +54,11 @@ pub struct Turn {
     pub items: Vec<Item>,
     pub requests: i64,
     pub cost_usd: f64,
+    pub ai_units: f64,
     pub output_tokens: i64,
     pub tool_calls: i64,
+    #[serde(skip)]
+    source_turn_index: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -118,7 +121,10 @@ pub fn session(conn: &Connection, id: &str) -> Result<Option<SessionView>> {
     } else {
         normalized_timeline(conn, id)?
     };
-    let turns = group_turns(events, &costs);
+    let mut turns = group_turns(events, &costs);
+    if harness == "copilot-cli" {
+        apply_copilot_usage(conn, id, &mut turns)?;
+    }
     let (cost_usd, subagent_cost_usd, ai_units): (f64, f64, f64) = conn.query_row(
         "SELECT COALESCE(SUM(cost_usd), 0),
                 COALESCE(SUM(CASE WHEN is_sidechain = 1 THEN cost_usd END), 0),
@@ -145,10 +151,12 @@ pub fn session(conn: &Connection, id: &str) -> Result<Option<SessionView>> {
 
 fn normalized_timeline(conn: &Connection, session_id: &str) -> Result<Vec<Event>> {
     let mut stmt = conn.prepare(
-        "SELECT ts, 0 AS sort, 'prompt' AS type, id, kind, text, NULL, NULL, NULL, NULL
+        "SELECT ts, 0 AS sort, 'prompt' AS type, id, kind, text,
+                NULL, NULL, NULL, NULL, NULL, NULL
          FROM prompts WHERE session_id = ?1
          UNION ALL
-         SELECT ts, 1, 'tool', id, NULL, NULL, tool, input_json, outcome, request_id
+         SELECT ts, 1, 'tool', id, NULL, NULL, tool, input_json, outcome, request_id,
+                duration_ms, result_detail
          FROM tool_calls WHERE session_id = ?1
          ORDER BY ts, sort",
     )?;
@@ -162,6 +170,10 @@ fn normalized_timeline(conn: &Connection, session_id: &str) -> Result<Vec<Event>
                     _ => "prompt",
                 },
                 text: r.get(5)?,
+                turn_index: r
+                    .get::<_, String>(3)?
+                    .rsplit_once(":turn:")
+                    .and_then(|(_, value)| value.parse().ok()),
             })
         } else {
             let tool: String = r.get(6)?;
@@ -173,8 +185,8 @@ fn normalized_timeline(conn: &Connection, session_id: &str) -> Result<Vec<Event>
                 summary: tool,
                 input: preview(input.as_deref().unwrap_or("{}")),
                 outcome: r.get(8)?,
-                result: None,
-                duration_ms: None,
+                result: r.get::<_, Option<String>>(11)?.map(|v| preview(&v)),
+                duration_ms: r.get(10)?,
                 request_id: r.get(9)?,
             }))
         }
@@ -201,18 +213,23 @@ fn raw_records(conn: &Connection, file: &str) -> Result<Vec<Value>> {
 
 struct RequestCost {
     cost: f64,
+    ai_units: f64,
     output: i64,
 }
 
 fn request_costs(conn: &Connection, session: &str) -> Result<HashMap<String, RequestCost>> {
-    let mut stmt =
-        conn.prepare("SELECT request_id, COALESCE(cost_usd, 0), COALESCE(output_tokens, 0) FROM requests WHERE session_id = ?1")?;
+    let mut stmt = conn.prepare(
+        "SELECT request_id, COALESCE(cost_usd, 0), COALESCE(ai_units, 0),
+                    COALESCE(output_tokens, 0)
+             FROM requests WHERE session_id = ?1",
+    )?;
     let rows = stmt.query_map([session], |r| {
         Ok((
             r.get::<_, String>(0)?,
             RequestCost {
                 cost: r.get(1)?,
-                output: r.get(2)?,
+                ai_units: r.get(2)?,
+                output: r.get(3)?,
             },
         ))
     })?;
@@ -225,6 +242,7 @@ pub enum Event {
         ts: String,
         text: String,
         kind: &'static str,
+        turn_index: Option<i64>,
     },
     Item(Item),
 }
@@ -238,15 +256,24 @@ fn group_turns(events: Vec<Event>, costs: &HashMap<String, RequestCost>) -> Vec<
         items: Vec::new(),
         requests: 0,
         cost_usd: 0.0,
+        ai_units: 0.0,
         output_tokens: 0,
         tool_calls: 0,
+        source_turn_index: None,
     };
     let mut turns: Vec<Turn> = Vec::new();
     let mut seen_requests = std::collections::HashSet::new();
     for event in events {
         match event {
-            Event::Prompt { ts, text, kind } => {
-                turns.push(new_turn(Some(text), Some(kind.to_string()), Some(ts)));
+            Event::Prompt {
+                ts,
+                text,
+                kind,
+                turn_index,
+            } => {
+                let mut turn = new_turn(Some(text), Some(kind.to_string()), Some(ts));
+                turn.source_turn_index = turn_index;
+                turns.push(turn);
             }
             Event::Item(item) => {
                 if turns.is_empty() {
@@ -271,13 +298,38 @@ fn group_turns(events: Vec<Event>, costs: &HashMap<String, RequestCost>) -> Vec<
                 {
                     turn.requests += 1;
                     turn.cost_usd += c.cost;
+                    turn.ai_units += c.ai_units;
                     turn.output_tokens += c.output;
                 }
+
                 turn.items.push(item);
             }
         }
     }
     turns
+}
+
+fn apply_copilot_usage(conn: &Connection, session: &str, turns: &mut [Turn]) -> Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT turn_index, COUNT(*), COALESCE(SUM(ai_units), 0),
+                COALESCE(SUM(output_tokens), 0)
+         FROM requests WHERE session_id = ?1 AND turn_index IS NOT NULL
+         GROUP BY turn_index",
+    )?;
+    let mut rows = stmt.query([session])?;
+    while let Some(r) = rows.next()? {
+        let index: i64 = r.get(0)?;
+        let Some(turn) = turns
+            .iter_mut()
+            .find(|turn| turn.source_turn_index == Some(index))
+        else {
+            continue;
+        };
+        turn.requests = r.get(1)?;
+        turn.ai_units = r.get(2)?;
+        turn.output_tokens = r.get(3)?;
+    }
+    Ok(())
 }
 
 pub fn preview(s: &str) -> String {

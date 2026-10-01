@@ -12,7 +12,8 @@ const SCHEMA: &str = include_str!("schema.sql");
 /// - 3: background-task notifications are no longer prompts; remove the ones imported as such.
 /// - 4: `requests.effort`, backfilled from the raw lines.
 /// - 5: Copilot CLI usage fields (`ai_units`, `duration_ms`).
-pub const SCHEMA_VERSION: i64 = 5;
+/// - 6: Copilot turn linkage, session modes and tool result telemetry.
+pub const SCHEMA_VERSION: i64 = 6;
 
 /// Lines per compressed block when migrating old rows.
 const MIGRATION_CHUNK_BYTES: usize = 4 * 1024 * 1024;
@@ -61,6 +62,16 @@ fn init(conn: &Connection) -> Result<()> {
              ALTER TABLE requests ADD COLUMN duration_ms INTEGER;",
         )?;
     }
+    if table_exists(conn, "requests")? && !column_exists(conn, "requests", "turn_index")? {
+        conn.execute_batch("ALTER TABLE requests ADD COLUMN turn_index INTEGER")?;
+    }
+    if table_exists(conn, "tool_calls")? && !column_exists(conn, "tool_calls", "turn_index")? {
+        conn.execute_batch(
+            "ALTER TABLE tool_calls ADD COLUMN turn_index INTEGER;
+             ALTER TABLE tool_calls ADD COLUMN duration_ms INTEGER;
+             ALTER TABLE tool_calls ADD COLUMN result_detail TEXT;",
+        )?;
+    }
     conn.execute_batch(SCHEMA)?;
     if table_exists(conn, "raw_lines")? {
         migrate_raw_lines(conn).context("migrating raw log lines to the compressed layout")?;
@@ -73,6 +84,14 @@ fn init(conn: &Connection) -> Result<()> {
     }
     if version < 4 && table_exists(conn, "raw_chunks")? {
         backfill_effort(conn).context("backfilling request effort from raw lines")?;
+    }
+    if version < 6 && table_exists(conn, "files")? {
+        // Re-read Copilot event logs once so commands, modes, durations and result previews
+        // introduced in v6 are backfilled from the retained source files.
+        conn.execute(
+            "UPDATE files SET offset = 0 WHERE harness = 'copilot-cli'",
+            [],
+        )?;
     }
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
@@ -275,5 +294,37 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM raw_chunks", [], |r| r.get(0))
             .unwrap();
         assert_eq!(chunks, 2);
+    }
+
+    #[test]
+    fn v6_replays_only_copilot_event_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("v5.db");
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(include_str!("schema.sql")).unwrap();
+            c.execute(
+                "INSERT INTO files (path, harness, size, offset, mtime, ingested_at)
+                 VALUES ('copilot.jsonl', 'copilot-cli', 100, 100, 1, '2026-01-01'),
+                        ('claude.jsonl', 'claude-code', 200, 200, 1, '2026-01-01')",
+                [],
+            )
+            .unwrap();
+            c.pragma_update(None, "user_version", 5).unwrap();
+        }
+
+        let conn = open(&path).unwrap();
+        let offsets: Vec<(String, i64)> = conn
+            .prepare("SELECT harness, offset FROM files ORDER BY harness")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            offsets,
+            vec![("claude-code".into(), 200), ("copilot-cli".into(), 0)]
+        );
+        assert!(table_exists(&conn, "session_modes").unwrap());
     }
 }

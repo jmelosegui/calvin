@@ -395,7 +395,7 @@
             <span class="dur">${dur(i.duration_ms)}</span><span class="chip ${esc(outcome)}">${esc(outcome)}</span></div>`;
         }).join("");
         const foot = t.requests || t.tool_calls
-          ? `<div class="foot"><b>${money(t.cost_usd)}</b> · ${t.requests} model request${t.requests === 1 ? "" : "s"} · ${tok(t.output_tokens)} output tokens · ${t.tool_calls} tool call${t.tool_calls === 1 ? "" : "s"}${span(t.started_at, t.ended_at) ? ` · ${dur(span(t.started_at, t.ended_at))}` : ""}</div>`
+          ? `<div class="foot"><b>${s.harness === "copilot-cli" ? `${t.ai_units.toFixed(2)} AIU` : money(t.cost_usd)}</b> · ${t.requests} model request${t.requests === 1 ? "" : "s"} · ${tok(t.output_tokens)} output tokens · ${t.tool_calls} tool call${t.tool_calls === 1 ? "" : "s"}${span(t.started_at, t.ended_at) ? ` · ${dur(span(t.started_at, t.ended_at))}` : ""}</div>`
           : "";
         return `<div class="turn">${you}${items ? `<div class="reply">${items}</div>` : ""}${foot}</div>`;
       }).join("");

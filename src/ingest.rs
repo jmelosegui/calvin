@@ -263,9 +263,9 @@ fn import_copilot_store(conn: &mut Connection, path: &Path) -> Result<()> {
         let mut insert = tx.prepare_cached(
                         "INSERT OR REPLACE INTO requests
                          (request_id, session_id, ts, model, input_tokens, output_tokens, cache_read,
-                          cache_write_5m, cache_write_1h, effort, cost_usd, ai_units, duration_ms,
-                          skill, is_sidechain)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9, NULL, ?10, ?11, NULL, ?12)",
+                          cache_write_5m, cache_write_1h, effort, turn_index, cost_usd, ai_units,
+                          duration_ms, skill, is_sidechain)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9, ?10, NULL, ?11, ?12, NULL, ?13)",
                     )?;
         while let Some(r) = q.next()? {
             let id: i64 = r.get(0)?;
@@ -282,6 +282,7 @@ fn import_copilot_store(conn: &mut Connection, path: &Path) -> Result<()> {
                 r.get::<_, Option<i64>>(8)?,
                 r.get::<_, Option<i64>>(9)?,
                 r.get::<_, Option<String>>(12)?,
+                r.get::<_, i64>(2)?,
                 r.get::<_, Option<i64>>(10)?
                     .map(|n| n as f64 / 1_000_000_000.0),
                 r.get::<_, Option<i64>>(11)?,
@@ -496,8 +497,8 @@ pub fn write_event(tx: &Transaction, harness: &str, event: &Event) -> Result<()>
             // MAX keeps the most complete numbers if they ever differ.
             tx.prepare_cached(
                 "INSERT INTO requests (request_id, session_id, ts, model, input_tokens, output_tokens,
-                     cache_read, cache_write_5m, cache_write_1h, skill, is_sidechain, effort)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                     cache_read, cache_write_5m, cache_write_1h, skill, is_sidechain, effort, turn_index)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                  ON CONFLICT (request_id) DO UPDATE SET
                      input_tokens = MAX(requests.input_tokens, excluded.input_tokens),
                      output_tokens = MAX(requests.output_tokens, excluded.output_tokens),
@@ -505,7 +506,8 @@ pub fn write_event(tx: &Transaction, harness: &str, event: &Event) -> Result<()>
                      cache_write_5m = MAX(requests.cache_write_5m, excluded.cache_write_5m),
                      cache_write_1h = MAX(requests.cache_write_1h, excluded.cache_write_1h),
                      skill = COALESCE(requests.skill, excluded.skill),
-                     effort = COALESCE(requests.effort, excluded.effort)",
+                     effort = COALESCE(requests.effort, excluded.effort),
+                     turn_index = COALESCE(requests.turn_index, excluded.turn_index)",
             )?
             .execute(params![
                 r.request_id,
@@ -519,19 +521,43 @@ pub fn write_event(tx: &Transaction, harness: &str, event: &Event) -> Result<()>
                 u.cache_write_1h,
                 r.skill,
                 r.is_sidechain,
-                r.effort
+                r.effort,
+                r.turn_index
             ])?;
         }
         Event::ToolCall(t) => {
             tx.prepare_cached(
-                "INSERT OR IGNORE INTO tool_calls (id, session_id, request_id, ts, tool, skill, input_json)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO tool_calls
+                 (id, session_id, request_id, ts, tool, skill, turn_index, input_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT(id) DO UPDATE SET
+                     request_id = COALESCE(tool_calls.request_id, excluded.request_id),
+                     turn_index = COALESCE(tool_calls.turn_index, excluded.turn_index),
+                     input_json = COALESCE(tool_calls.input_json, excluded.input_json)",
             )?
-            .execute(params![t.id, t.session_id, t.request_id, t.ts, t.tool, t.skill, t.input_json])?;
+            .execute(params![
+                t.id,
+                t.session_id,
+                t.request_id,
+                t.ts,
+                t.tool,
+                t.skill,
+                t.turn_index,
+                t.input_json
+            ])?;
         }
         Event::ToolResult(r) => {
-            tx.prepare_cached("UPDATE tool_calls SET outcome = ?1 WHERE id = ?2")?
-                .execute(params![r.outcome.as_str(), r.tool_use_id])?;
+            tx.prepare_cached(
+                "UPDATE tool_calls SET outcome = ?1, result_detail = ?3,
+                     duration_ms = MAX(0, CAST((julianday(?4) - julianday(ts)) * 86400000 AS INTEGER))
+                 WHERE id = ?2",
+            )?
+            .execute(params![
+                r.outcome.as_str(),
+                r.tool_use_id,
+                r.detail,
+                r.ts
+            ])?;
             if matches!(r.outcome, Outcome::Rejected | Outcome::Denied) {
                 tx.prepare_cached(
                     "INSERT OR IGNORE INTO friction (id, session_id, ts, kind, tool, detail)
@@ -551,6 +577,18 @@ pub fn write_event(tx: &Transaction, harness: &str, event: &Event) -> Result<()>
                 "INSERT OR IGNORE INTO friction (id, session_id, ts, kind) VALUES (?1, ?2, ?3, 'interrupted')",
             )?
             .execute(params![id, session_id, ts])?;
+        }
+        Event::ModeChanged {
+            id,
+            session_id,
+            ts,
+            mode,
+        } => {
+            tx.prepare_cached(
+                "INSERT OR IGNORE INTO session_modes (id, session_id, ts, mode)
+                 VALUES (?1, ?2, ?3, ?4)",
+            )?
+            .execute(params![id, session_id, ts, mode])?;
         }
     }
     Ok(())

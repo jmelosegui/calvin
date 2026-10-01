@@ -65,6 +65,7 @@ pub fn parse_record(v: &Value, native_session_id: &str) -> Vec<Event> {
                 ts,
                 tool: tool.to_string(),
                 skill: skill_name(tool, data.get("arguments")),
+                turn_index: data.get("turnIndex").and_then(Value::as_i64),
                 input_json: data
                     .get("arguments")
                     .cloned()
@@ -86,10 +87,61 @@ pub fn parse_record(v: &Value, native_session_id: &str) -> Vec<Event> {
                 session_id: namespaced(native_session_id),
                 ts,
                 outcome,
-                detail: None,
+                detail: copilot_result_detail(data),
             })]
         }
+        "user.message" => {
+            let Some(text) = data.get("content").and_then(Value::as_str) else {
+                return Vec::new();
+            };
+            let text = text.trim();
+            if !text.starts_with('/') {
+                return Vec::new();
+            }
+            let id = v
+                .get("id")
+                .and_then(Value::as_str)
+                .map(namespaced)
+                .unwrap_or_else(|| format!("{}:command:{ts}", namespaced(native_session_id)));
+            vec![Event::Prompt(Prompt {
+                id,
+                session_id: namespaced(native_session_id),
+                ts,
+                kind: PromptKind::Command,
+                text: text.to_string(),
+                is_sidechain: false,
+            })]
+        }
+        "session.mode_changed" => {
+            let Some(mode) = data.get("newMode").and_then(Value::as_str) else {
+                return Vec::new();
+            };
+            let id = v
+                .get("id")
+                .and_then(Value::as_str)
+                .map(namespaced)
+                .unwrap_or_else(|| format!("{}:mode:{ts}", namespaced(native_session_id)));
+            vec![Event::ModeChanged {
+                id,
+                session_id: namespaced(native_session_id),
+                ts,
+                mode: mode.to_string(),
+            }]
+        }
         _ => Vec::new(),
+    }
+}
+
+fn copilot_result_detail(data: &Value) -> Option<String> {
+    let value = data.get("error").or_else(|| data.get("result"))?;
+    let text = match value {
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    };
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.chars().take(2_000).collect())
     }
 }
 
@@ -130,5 +182,43 @@ mod tests {
         };
         assert_eq!(call.id, "copilot-cli:tool-1");
         assert_eq!(call.session_id, "copilot-cli:session-1");
+    }
+
+    #[test]
+    fn imports_commands_but_not_normal_messages() {
+        let command = serde_json::json!({
+            "id": "event-command",
+            "type": "user.message",
+            "timestamp": "2026-09-30T12:00:00Z",
+            "data": {"content": "/review"}
+        });
+        let events = parse_record(&command, "session-1");
+        let [Event::Prompt(prompt)] = events.as_slice() else {
+            panic!("expected a command");
+        };
+        assert_eq!(prompt.text, "/review");
+        assert_eq!(prompt.kind, PromptKind::Command);
+
+        let message = serde_json::json!({
+            "type": "user.message",
+            "timestamp": "2026-09-30T12:00:00Z",
+            "data": {"content": "review this"}
+        });
+        assert!(parse_record(&message, "session-1").is_empty());
+    }
+
+    #[test]
+    fn parses_mode_changes() {
+        let v = serde_json::json!({
+            "id": "event-mode",
+            "type": "session.mode_changed",
+            "timestamp": "2026-09-30T12:00:00Z",
+            "data": {"previousMode": "interactive", "newMode": "plan"}
+        });
+        let events = parse_record(&v, "session-1");
+        let [Event::ModeChanged { mode, .. }] = events.as_slice() else {
+            panic!("expected a mode change");
+        };
+        assert_eq!(mode, "plan");
     }
 }

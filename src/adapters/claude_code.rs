@@ -89,6 +89,7 @@ fn parse_assistant(
             usage: message.get("usage").map(parse_usage),
             skill: str_at(v, "attributionSkill"),
             effort: str_at(v, "effort"),
+            turn_index: None,
             is_sidechain,
         }));
     }
@@ -113,6 +114,7 @@ fn parse_assistant(
             ts: ts.clone(),
             tool,
             skill,
+            turn_index: None,
             input_json: input.to_string(),
         }));
     }
@@ -422,11 +424,13 @@ pub fn timeline(records: &[Value]) -> Vec<crate::timeline::Event> {
                         ts,
                         text: cmd,
                         kind: "command",
+                        turn_index: None,
                     }),
                     None => out.push(Event::Prompt {
                         ts,
                         text: text.to_string(),
                         kind: "prompt",
+                        turn_index: None,
                     }),
                 }
             }
