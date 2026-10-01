@@ -17,6 +17,8 @@
   --claude-ink: #ff8a4d;
   --copilot: #6ca8ff;
   --copilot-ink: #8fbdff;
+  --cursor: #8bd450;
+  --cursor-ink: #a8e56f;
   --dot: rgba(255, 255, 255, 0.05);
   --btn: #221f1c;
 }
@@ -35,6 +37,8 @@
   --claude-ink: #b84604;
   --copilot: #397fdc;
   --copilot-ink: #155ebd;
+  --cursor: #2e9149;
+  --cursor-ink: #23723a;
   --dot: rgba(0, 0, 0, 0.07);
   --btn: #ece6de;
 }
@@ -99,6 +103,7 @@ h1 .px { font-family: "Silkscreen", monospace; font-weight: 400; font-size: 36px
 }
 .provider-badge.claude-code { border-color: var(--claude); color: var(--claude-ink); }
 .provider-badge.copilot-cli { border-color: var(--copilot); color: var(--copilot-ink); }
+.provider-badge.cursor { border-color: var(--cursor); color: var(--cursor-ink); }
 .btn {
   display: inline-flex; align-items: center; gap: 10px; padding: 10px 16px; border: 0; border-radius: 8px;
   background: var(--btn); color: var(--text); font: 600 14px "Outfit", sans-serif; cursor: pointer;
@@ -122,6 +127,7 @@ main { display: grid; grid-template-columns: repeat(12, 1fr); gap: 18px; max-wid
 .billing-legend i { width: 9px; height: 9px; border-radius: 3px; }
 .billing-legend .claude-code i { background: var(--claude); }
 .billing-legend .copilot-cli i { background: var(--copilot); }
+.billing-legend .cursor i { background: var(--cursor); }
 .empty { padding: 24px 0; color: var(--muted); font-size: 14px; }
 .eyebrow { font-size: 11px; font-weight: 500; letter-spacing: 0.24em; text-transform: uppercase; color: var(--muted); }
 
@@ -141,6 +147,7 @@ svg text { fill: var(--muted); font: 500 11px "JetBrains Mono", monospace; }
 .bar { fill: var(--orange); pointer-events: none; }
 .bar.claude-code { fill: var(--claude); }
 .bar.copilot-cli { fill: var(--copilot); }
+.bar.cursor { fill: var(--cursor); }
 .hit { fill: transparent; cursor: crosshair; }
 .frame { fill: none; stroke: var(--line); stroke-width: 1.5; }
 .book { fill: none; stroke: var(--line); stroke-width: 1.3; cursor: pointer; pointer-events: all; }

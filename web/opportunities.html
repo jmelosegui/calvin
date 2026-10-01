@@ -160,6 +160,7 @@
           <option value="">All tools</option>
           <option value="claude-code">Claude Code</option>
           <option value="copilot-cli">Copilot CLI</option>
+          <option value="cursor">Cursor</option>
           <option value="cross-tool">Cross-tool</option>
         </select>
       </label>
@@ -199,7 +200,7 @@
 
   <main id="main"><section class="panel"><div class="empty">Checking your setup…</div></section></main>
 
-  <footer>Checked against your local Claude Code and Copilot CLI data, settings and projects. Nothing is changed for you.</footer>
+  <footer>Checked against your local Claude Code, Copilot CLI and Cursor data, settings and projects. Nothing is changed for you.</footer>
 
   <dialog id="odialog" class="odialog"><div class="dh"><b>Recommendation</b><button class="btn" id="oclose">Close</button></div><div class="obody" id="obody"></div></dialog>
   <dialog id="dialog"><div class="dh"><b id="dtitle"></b><button class="btn" id="dcopy">Copy</button><button class="btn" id="dclose">Close</button></div><pre id="dbody"></pre></dialog>
@@ -245,8 +246,8 @@
     }
 
     const STATUS = { action: "Worth doing", consider: "Worth a look", good: "In place" };
-    const scopeOf = (o) => o.id.startsWith("copilot-") ? "copilot-cli" : o.area === "Cross-tool" ? "cross-tool" : "claude-code";
-    const SCOPE = { "claude-code": "Claude Code", "copilot-cli": "Copilot CLI", "cross-tool": "Cross-tool" };
+    const scopeOf = (o) => o.id.startsWith("copilot-") ? "copilot-cli" : o.id.startsWith("cursor-") ? "cursor" : o.area === "Cross-tool" ? "cross-tool" : "claude-code";
+    const SCOPE = { "claude-code": "Claude Code", "copilot-cli": "Copilot CLI", cursor: "Cursor", "cross-tool": "Cross-tool" };
     const scopedItems = () => items.filter((o) => !selectedScope || scopeOf(o) === selectedScope);
     const visibleItems = () => scopedItems().filter((o) => !selectedArea || o.area === selectedArea);
 

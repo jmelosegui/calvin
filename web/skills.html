@@ -95,6 +95,7 @@
           <option value="">All tools</option>
           <option value="claude-code">Claude Code</option>
           <option value="copilot-cli">Copilot CLI</option>
+          <option value="cursor">Cursor</option>
         </select>
       </label>
       <div class="seg" id="source">
@@ -124,7 +125,7 @@
     <button class="btn primary" id="pack">Pack</button>
   </div>
 
-  <footer id="footer">Skills are read from Claude Code and Copilot CLI folders and never changed. Packages download to your browser.</footer>
+  <footer id="footer">Skills are read from Claude Code, Copilot CLI and Cursor folders and never changed. Packages download to your browser.</footer>
 
   <script>
     const $ = (s) => document.querySelector(s);
@@ -145,7 +146,7 @@
     const details = new Map(); // name → /api/skills/detail response
 
     const KIND = { global: "global", project: "project", plugin: "plugin" };
-    const PROVIDER = { "claude-code": "Claude Code", "copilot-cli": "Copilot CLI" };
+    const PROVIDER = { "claude-code": "Claude Code", "copilot-cli": "Copilot CLI", cursor: "Cursor" };
     const providerBadges = (s) => s.providers?.length
       ? s.providers.map((p) => `<span class="provider-badge ${esc(p)}">${esc(PROVIDER[p] ?? p)}</span>`).join(" ")
       : `<span class="provider-badge">usage only</span>`;

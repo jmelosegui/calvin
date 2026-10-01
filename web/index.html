@@ -30,6 +30,7 @@
           <option value="">All tools</option>
           <option value="claude-code">Claude Code</option>
           <option value="copilot-cli">Copilot CLI</option>
+          <option value="cursor">Cursor</option>
         </select>
       </label>
       <div class="seg" id="range">
@@ -53,7 +54,7 @@
 
     <section class="panel span-8" id="costPanel">
       <h2 id="costTitle">Billing usage per day</h2>
-      <p class="sub" id="costNote">Claude estimates and Copilot's converted AI credits share one USD axis. Hover a bar for the day.</p>
+      <p class="sub" id="costNote">Provider-specific billing estimates share one USD axis. Hover a bar for the day.</p>
       <div class="billing-legend" id="costLegend"></div>
       <svg id="costChart" viewBox="0 0 900 330"></svg>
     </section>
@@ -146,6 +147,7 @@
       const cache = s.cache_hit_rate == null ? "–" : (s.cache_hit_rate * 100).toFixed(0) + "<small>%</small>";
       const copilotOnly = selectedHarness() === "copilot-cli";
       const claudeOnly = selectedHarness() === "claude-code";
+      const cursorOnly = selectedHarness() === "cursor";
       $("#kpis").innerHTML = [
         ["Sessions", num(s.sessions), `${num(s.requests)} model requests`],
         ["Prompts", num(s.prompts), `plus ${num(s.commands)} slash commands`],
@@ -153,8 +155,10 @@
           ? ["AI units", s.ai_units.toFixed(2), `${approxAiUsd(s.ai_units)} overage equivalent · 1 AIU = $0.01`]
           : claudeOnly
             ? ["Est. cost", money(s.cost_usd), "Claude API list-price estimate"]
-            : ["Billing value", `~${money(s.cost_usd + aiCreditUsd(s.ai_units))}`, `${money(s.cost_usd)} Claude estimate + ${approxAiUsd(s.ai_units)} Copilot equivalent`],
-        copilotOnly
+            : cursorOnly
+              ? ["Est. cost", money(s.cost_usd), "Cursor tokens at API list price; not your Cursor bill"]
+              : ["Billing value", `~${money(s.cost_usd + aiCreditUsd(s.ai_units))}`, `${money(s.cost_usd)} Claude + Cursor API estimates · ${approxAiUsd(s.ai_units)} Copilot equivalent`],
+        copilotOnly || cursorOnly
           ? ["Cache hit rate", "–", "not comparable with Claude cache data"]
           : ["Cache hit rate", cache, "Claude input served from cache"],
         ["Skills used", `${used}<small> of ${installed.length}</small>`, "installed skills that ran"],
@@ -168,10 +172,10 @@
         $("#comparison").innerHTML = `<div class="empty">No supported CLI sessions in this period.</div>`;
         return;
       }
-      const name = (id) => id === "claude-code" ? "Claude Code" : id === "copilot-cli" ? "Copilot CLI" : id;
+      const name = (id) => id === "claude-code" ? "Claude Code" : id === "copilot-cli" ? "Copilot CLI" : id === "cursor" ? "Cursor" : id;
       const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
       const fallback = ["#8bd450", "#d783ff", "#ffd166", "#4dd9c0"];
-      const color = (id, index) => id === "claude-code" ? css("--claude") : id === "copilot-cli" ? css("--copilot") : fallback[index % fallback.length];
+      const color = (id, index) => id === "claude-code" ? css("--claude") : id === "copilot-cli" ? css("--copilot") : id === "cursor" ? css("--cursor") : fallback[index % fallback.length];
       const totalSessions = rows.reduce((n, r) => n + r.sessions, 0);
       let cursor = 0;
       const stops = rows.map((r, i) => {
@@ -196,7 +200,7 @@
       }).join("");
       const legend = rows.map((r, i) => {
         const share = totalSessions ? Math.round((r.sessions / totalSessions) * 100) : 0;
-        const billing = r.harness === "claude-code"
+        const billing = r.harness !== "copilot-cli"
           ? `${money(r.cost_usd ?? 0)} estimated cost`
           : r.ai_units == null ? "billing unavailable" : `${r.ai_units.toFixed(2)} AI units · ${approxAiUsd(r.ai_units)} overage equivalent`;
         return `<div class="mix-legend"><i style="background:${color(r.harness, i)}"></i><span><b>${esc(name(r.harness))}</b><small>${num(r.sessions)} sessions · ${share}% · ${esc(billing)}</small></span></div>`;
@@ -211,31 +215,49 @@
     }
 
     // ---------- cost chart ----------
-    function renderCost(rows) {
+    function renderCost(seriesRows) {
       const harness = selectedHarness();
-      const showClaude = harness !== "copilot-cli";
-      const showCopilot = harness !== "claude-code";
+      const showClaude = !harness || harness === "claude-code";
+      const showCopilot = !harness || harness === "copilot-cli";
+      const showCursor = !harness || harness === "cursor";
       $("#costTitle").textContent = harness === "claude-code" ? "Claude Code spend per day"
         : harness === "copilot-cli" ? "Copilot equivalent spend per day"
+        : harness === "cursor" ? "Cursor estimated API value per day"
         : "Billing value per day";
       $("#costNote").textContent = harness === "claude-code"
         ? "Estimated from token counts at API list price. Hover a bar for the day."
         : harness === "copilot-cli"
           ? "Approximate USD overage value at 1 AI credit = $0.01. Hover a bar for the raw credit count."
-          : "Both providers share one USD axis: Claude API list-price estimate and Copilot AI credits converted at $0.01 each.";
+          : harness === "cursor"
+            ? "Estimated from Cursor-recorded tokens at model API list price. This is not your Cursor subscription bill."
+            : "All providers share one USD axis: Claude and Cursor API list-price estimates, plus Copilot AI credits converted at $0.01 each.";
       $("#costLegend").innerHTML = [
         showClaude ? `<span class="claude-code"><i></i>Claude: estimated API list-price USD</span>` : "",
         showCopilot ? `<span class="copilot-cli"><i></i>Copilot: approximate USD overage value (1 AI credit = $0.01; included credits may mean $0 billed)</span>` : "",
+        showCursor ? `<span class="cursor"><i></i>Cursor: recorded tokens at API list price (not subscription cost)</span>` : "",
       ].join("");
-      const byDay = new Map(rows.map((r) => [r.key, r]));
+      const claudeByDay = new Map((seriesRows["claude-code"] ?? []).map((r) => [r.key, r]));
+      const copilotByDay = new Map((seriesRows["copilot-cli"] ?? []).map((r) => [r.key, r]));
+      const cursorByDay = new Map((seriesRows.cursor ?? []).map((r) => [r.key, r]));
       const days = [];
       for (let i = range - 1; i >= 0; i--) {
         const d = new Date();
         d.setHours(12, 0, 0, 0);
         d.setDate(d.getDate() - i);
-        const r = byDay.get(localDay(d));
-        const units = r?.ai_units ?? 0;
-        days.push({ d, cost: r?.cost_usd ?? 0, units, copilotUsd: aiCreditUsd(units), sessions: r?.sessions ?? 0, requests: r?.requests ?? 0 });
+        const key = localDay(d);
+        const claude = claudeByDay.get(key);
+        const copilot = copilotByDay.get(key);
+        const cursor = cursorByDay.get(key);
+        const units = copilot?.ai_units ?? 0;
+        days.push({
+          d,
+          claude: claude?.cost_usd ?? 0,
+          cursor: cursor?.cost_usd ?? 0,
+          units,
+          copilotUsd: aiCreditUsd(units),
+          sessions: (claude?.sessions ?? 0) + (copilot?.sessions ?? 0) + (cursor?.sessions ?? 0),
+          requests: (claude?.requests ?? 0) + (copilot?.requests ?? 0) + (cursor?.requests ?? 0),
+        });
       }
       const svg = $("#costChart");
       svg.innerHTML = "";
@@ -248,7 +270,7 @@
         const step = [1, 2, 5, 10].map((n) => n * power).find((n) => n >= rough);
         return { top: Math.ceil(max / step) * step, step };
       };
-      const values = days.flatMap((d) => [showClaude ? d.cost : 0, showCopilot ? d.copilotUsd : 0]);
+      const values = days.flatMap((d) => [showClaude ? d.claude : 0, showCopilot ? d.copilotUsd : 0, showCursor ? d.cursor : 0]);
       const usd = scale(Math.max(...values));
       const y = (v, top) => T + ph - (v / top) * ph;
       const axis = (v) => v < 1 ? v.toFixed(2) : v < 10 ? v.toFixed(1) : v.toFixed(0);
@@ -258,7 +280,7 @@
         svg.append(el("text", { x: L - 8, y: y(v, usd.top) + 4, "text-anchor": "end" }, "$" + axis(v)));
       }
       const slot = pw / days.length;
-      const series = (showClaude ? 1 : 0) + (showCopilot ? 1 : 0);
+      const series = (showClaude ? 1 : 0) + (showCopilot ? 1 : 0) + (showCursor ? 1 : 0);
       const gap = series > 1 ? 1 : 0;
       const bw = Math.max(2, (slot - 2 - gap) / series);
       const labelEvery = Math.ceil(days.length / 7);
@@ -267,8 +289,9 @@
         const hit = el("rect", { x: L + i * slot, y: T, width: slot, height: ph, class: "hit" });
         hit.addEventListener("mousemove", (e) => {
           const billing = [
-            showClaude ? money(d.cost) + " Claude estimate" : "",
+            showClaude ? money(d.claude) + " Claude estimate" : "",
             showCopilot ? `${d.units.toFixed(2)} Copilot AIU · ${approxAiUsd(d.units)} overage equivalent` : "",
+            showCursor ? money(d.cursor) + " Cursor API estimate" : "",
           ].filter(Boolean).join("<br>");
           showTip(e, `<b>${fmtDate(d.d)}</b><br>${billing}<br><span class="m">${d.sessions} sessions · ${num(d.requests)} model requests</span>`);
         });
@@ -284,8 +307,9 @@
           }));
         };
         let offset = 0;
-        if (showClaude) { draw(d.cost, usd.top, baseX, "claude-code"); offset = bw + gap; }
-        if (showCopilot) draw(d.copilotUsd, usd.top, baseX + offset, "copilot-cli");
+        if (showClaude) { draw(d.claude, usd.top, baseX, "claude-code"); offset += bw + gap; }
+        if (showCopilot) { draw(d.copilotUsd, usd.top, baseX + offset, "copilot-cli"); offset += bw + gap; }
+        if (showCursor) draw(d.cursor, usd.top, baseX + offset, "cursor");
         if (i % labelEvery === 0) svg.append(el("text", { x: L + i * slot + slot / 2, y: H - 6, "text-anchor": "middle" }, fmtDate(d.d)));
       });
     }
@@ -295,7 +319,7 @@
       const svg = $("#shelf");
       svg.innerHTML = "";
       if (!skills.length) {
-        $("#never").textContent = "No skills found. calvin looks in ~/.claude/skills, installed plugins and each project's .claude/skills.";
+        $("#never").textContent = "No skills found. calvin checks Claude Code, Copilot CLI and Cursor skill folders.";
         return;
       }
       const books = [...skills].sort((a, b) => a.name.localeCompare(b.name));
@@ -408,9 +432,12 @@
       const total = rows.reduce((t, r) => t + billingValue(r), 0);
       const requests = rows.reduce((t, r) => t + r.requests, 0);
       const copilotOnly = selectedHarness() === "copilot-cli";
+      const cursorOnly = selectedHarness() === "cursor";
       $("#modelsNote").textContent = copilotOnly
         ? "Which models did the work. USD values approximate Copilot overage pricing at 1 AI credit = $0.01."
-        : "Which models did the work and their estimated or equivalent USD value. Subagents often do simpler work that a cheaper model can handle.";
+        : cursorOnly
+          ? "Which models did the work. USD values estimate recorded tokens at API list price, not Cursor subscription cost."
+          : "Which models did the work and their estimated or equivalent USD value. Subagents often do simpler work that a cheaper model can handle.";
       $("#models").innerHTML = rows.map((r, i) => {
         const value = billingValue(r);
         const share = total ? Math.round((value / total) * 100) : 0;
@@ -451,11 +478,17 @@
     async function load() {
       const harness = selectedHarness();
       const since = `since=${range}d${harness ? `&harness=${encodeURIComponent(harness)}` : ""}`;
+      const costRequest = harness
+        ? api(`/api/cost?by=day&${since}`).then((rows) => ({ [harness]: rows }))
+        : Promise.all(["claude-code", "copilot-cli", "cursor"].map(async (provider) => [
+            provider,
+            await api(`/api/cost?by=day&since=${range}d&harness=${provider}`),
+          ])).then(Object.fromEntries);
       try {
-        const [summary, comparison, cost, skills, prompts, projects, friction, models] = await Promise.all([
+        const [summary, comparison, costSeries, skills, prompts, projects, friction, models] = await Promise.all([
           api(`/api/summary?${since}`),
           api(`/api/comparison?${since}`),
-          api(`/api/cost?by=day&${since}`),
+          costRequest,
           api(`/api/skills?${since}`),
           api(`/api/prompts?min=3&limit=6&${since}`),
           api(`/api/cost?by=project&${since}`),
@@ -464,14 +497,18 @@
         ]);
         renderKpis(summary, skills);
         renderComparison(comparison);
-        renderCost(cost);
+        renderCost(costSeries);
         renderShelf(skills);
         renderPrompts(prompts);
         const projectValue = (r) => r.cost_usd + aiCreditUsd(r.ai_units ?? 0);
-        $("#projectTitle").textContent = harness === "copilot-cli" ? "Copilot value by project" : "Billing value by project";
+        $("#projectTitle").textContent = harness === "copilot-cli" ? "Copilot value by project"
+          : harness === "cursor" ? "Cursor API estimate by project"
+          : "Billing value by project";
         $("#projectNote").textContent = harness === "copilot-cli"
           ? "Approximate USD overage value at 1 AI credit = $0.01."
-          : "Claude estimated cost plus Copilot's approximate USD overage value.";
+          : harness === "cursor"
+            ? "Recorded Cursor tokens at API list price, not subscription cost."
+            : "Claude and Cursor API estimates plus Copilot's approximate USD overage value.";
         hbars("#projects", projects.slice(0, 6).map((r) => [r.key, projectValue(r)]), harness === "claude-code" ? money : (v) => `~${money(v)}`, "No billing usage in this period.");
         renderFriction(friction);
         renderModels(models);
@@ -484,7 +521,7 @@
     let paused = false;
     let seen = new Set();
     const LIVE_LABEL = { prompt: "prompt", command: "command", tool: "tool", skill: "skill", request: "model", rejected: "rejected", denied: "denied", interrupted: "interrupted" };
-    const LIVE_HARNESS = { "claude-code": "CC", "copilot-cli": "CP" };
+    const LIVE_HARNESS = { "claude-code": "CC", "copilot-cli": "CP", cursor: "CU" };
     async function tick() {
       if (paused) return;
       try {
@@ -505,7 +542,7 @@
         const sync = status.last_sync;
         const synced = sync ? new Date(sync.at).toLocaleTimeString() : "not yet";
         const syncErr = sync?.error ? ` · <span class="error">sync error: ${esc(sync.error)}</span>` : "";
-        $("#footer").innerHTML = `calvin ${esc(status.version)} · data from your local Claude Code and Copilot CLI logs, kept on this machine · last synced ${synced}${syncErr}`;
+        $("#footer").innerHTML = `calvin ${esc(status.version)} · data from your local Claude Code, Copilot CLI and Cursor history, kept on this machine · last synced ${synced}${syncErr}`;
         renderUpdate(status.update);
         if (sync && sync.lines > 0 && !first) load();
       } catch (e) {
