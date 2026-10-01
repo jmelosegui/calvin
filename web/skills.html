@@ -310,7 +310,6 @@
       }));
     $("#provider-filter").onchange = (event) => {
       provider = event.target.value;
-      event.target.closest(".cli-picker").dataset.cli = provider;
       renderList();
     };
     $("#pack").onclick = () => pack([...selected]);

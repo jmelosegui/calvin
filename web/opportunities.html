@@ -177,7 +177,7 @@
           <h2>Turn these opportunities into an action plan</h2>
           <p class="sub"><b>The checklist below is complete without this step.</b> Use the advisor when you want the AI tool you choose to prioritize Calvin's findings, connect patterns, and draft ready-to-use changes. Nothing is sent until you press the button.</p>
         </div>
-        <label class="prov provider-picker" title="This chooses which installed AI writes the optional plan; it does not filter the recommendations.">Plan writer <select id="provider"></select></label>
+        <label class="prov" title="This chooses which installed AI writes the optional plan; it does not filter the recommendations.">Plan writer <select id="provider"></select></label>
       </div>
       <div class="custom" id="custom">
         <input class="field" id="cname" placeholder="Name, e.g. Codex" />
@@ -332,7 +332,6 @@
 
     $("#scope").onchange = (event) => {
       selectedScope = event.target.value;
-      event.target.closest(".cli-picker").dataset.cli = selectedScope;
       selectedArea = "";
       render();
     };
@@ -395,7 +394,6 @@
     function updateAdvisorUi() {
       const p = current();
       const isCustom = p?.id === "command";
-      $("#provider").closest(".provider-picker").dataset.cli = p?.id ?? "";
       $("#custom").classList.toggle("show", isCustom && !p.available);
       $("#ask").textContent = `Ask ${p ? p.name : "the advisor"} to prioritize these opportunities`;
       $("#ask").disabled = !p || !p.available || polling !== null;

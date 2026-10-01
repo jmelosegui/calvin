@@ -497,10 +497,7 @@
 
     document.documentElement.dataset.theme = localStorage.getItem("calvin-theme") ?? "dark";
     document.querySelectorAll("#range button").forEach((b) => b.addEventListener("click", () => setRange(+b.dataset.days)));
-    $("#harness").onchange = () => {
-      $("#harness").closest(".cli-picker").dataset.cli = selectedHarness();
-      load();
-    };
+    $("#harness").onchange = load;
     $("#pause").addEventListener("click", togglePause);
     $("#theme").addEventListener("click", toggleTheme);
     $("#fs").addEventListener("click", fullscreen);

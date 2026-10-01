@@ -219,10 +219,8 @@
       $("#q").oninput = renderList;
       $("#project").onchange = renderList;
       $("#harness").value = harness;
-      $("#harness").closest(".cli-picker").dataset.cli = harness;
       $("#harness").onchange = () => {
         harness = $("#harness").value;
-        $("#harness").closest(".cli-picker").dataset.cli = harness;
         renderList();
       };
       $("#onlyfriction").onchange = renderList;
