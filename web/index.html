@@ -53,7 +53,7 @@
 
     <section class="panel span-8" id="costPanel">
       <h2 id="costTitle">Billing usage per day</h2>
-      <p class="sub" id="costNote">Claude estimated USD and Copilot-reported AI units use separate axes. Hover a bar for the day.</p>
+      <p class="sub" id="costNote">Claude estimates and Copilot's converted AI credits share one USD axis. Hover a bar for the day.</p>
       <div class="billing-legend" id="costLegend"></div>
       <svg id="costChart" viewBox="0 0 900 330"></svg>
     </section>
@@ -216,16 +216,16 @@
       const showClaude = harness !== "copilot-cli";
       const showCopilot = harness !== "claude-code";
       $("#costTitle").textContent = harness === "claude-code" ? "Claude Code spend per day"
-        : harness === "copilot-cli" ? "Copilot AI units per day"
-        : "Billing usage per day";
+        : harness === "copilot-cli" ? "Copilot equivalent spend per day"
+        : "Billing value per day";
       $("#costNote").textContent = harness === "claude-code"
         ? "Estimated from token counts at API list price. Hover a bar for the day."
         : harness === "copilot-cli"
-          ? "AI units reported by Copilot CLI, with their approximate USD overage value. Hover a bar for the day."
-          : "Claude estimated USD and Copilot-reported AI units remain separate; Copilot's approximate USD value is shown in tooltips.";
+          ? "Approximate USD overage value at 1 AI credit = $0.01. Hover a bar for the raw credit count."
+          : "Both providers share one USD axis: Claude API list-price estimate and Copilot AI credits converted at $0.01 each.";
       $("#costLegend").innerHTML = [
         showClaude ? `<span class="claude-code"><i></i>Claude: estimated API list-price USD</span>` : "",
-        showCopilot ? `<span class="copilot-cli"><i></i>Copilot: 1 AI credit = $0.01 USD overage value (included credits may mean $0 billed)</span>` : "",
+        showCopilot ? `<span class="copilot-cli"><i></i>Copilot: approximate USD overage value (1 AI credit = $0.01; included credits may mean $0 billed)</span>` : "",
       ].join("");
       const byDay = new Map(rows.map((r) => [r.key, r]));
       const days = [];
@@ -234,11 +234,12 @@
         d.setHours(12, 0, 0, 0);
         d.setDate(d.getDate() - i);
         const r = byDay.get(localDay(d));
-        days.push({ d, cost: r?.cost_usd ?? 0, units: r?.ai_units ?? 0, sessions: r?.sessions ?? 0, requests: r?.requests ?? 0 });
+        const units = r?.ai_units ?? 0;
+        days.push({ d, cost: r?.cost_usd ?? 0, units, copilotUsd: aiCreditUsd(units), sessions: r?.sessions ?? 0, requests: r?.requests ?? 0 });
       }
       const svg = $("#costChart");
       svg.innerHTML = "";
-      const W = 900, H = 330, L = 56, R = showCopilot ? 62 : 6, T = 10, B = 26;
+      const W = 900, H = 330, L = 56, R = 6, T = 10, B = 26;
       const pw = W - L - R, ph = H - T - B;
       const scale = (max) => {
         if (max <= 0) return { top: 1, step: 0.2 };
@@ -247,24 +248,14 @@
         const step = [1, 2, 5, 10].map((n) => n * power).find((n) => n >= rough);
         return { top: Math.ceil(max / step) * step, step };
       };
-      const usd = scale(Math.max(...days.map((d) => d.cost)));
-      const aiu = scale(Math.max(...days.map((d) => d.units)));
+      const values = days.flatMap((d) => [showClaude ? d.cost : 0, showCopilot ? d.copilotUsd : 0]);
+      const usd = scale(Math.max(...values));
       const y = (v, top) => T + ph - (v / top) * ph;
       const axis = (v) => v < 1 ? v.toFixed(2) : v < 10 ? v.toFixed(1) : v.toFixed(0);
 
-      const gridScale = showClaude ? usd : aiu;
-      for (let v = 0; v <= gridScale.top + gridScale.step / 2; v += gridScale.step) {
-        svg.append(el("line", { x1: L, x2: W - R, y1: y(v, gridScale.top), y2: y(v, gridScale.top), class: "grid-line" }));
-      }
-      if (showClaude) {
-        for (let v = 0; v <= usd.top + usd.step / 2; v += usd.step) {
-          svg.append(el("text", { x: L - 8, y: y(v, usd.top) + 4, "text-anchor": "end" }, "$" + axis(v)));
-        }
-      }
-      if (showCopilot) {
-        for (let v = 0; v <= aiu.top + aiu.step / 2; v += aiu.step) {
-          svg.append(el("text", { x: W - R + 8, y: y(v, aiu.top) + 4, "text-anchor": "start" }, axis(v) + " AIU"));
-        }
+      for (let v = 0; v <= usd.top + usd.step / 2; v += usd.step) {
+        svg.append(el("line", { x1: L, x2: W - R, y1: y(v, usd.top), y2: y(v, usd.top), class: "grid-line" }));
+        svg.append(el("text", { x: L - 8, y: y(v, usd.top) + 4, "text-anchor": "end" }, "$" + axis(v)));
       }
       const slot = pw / days.length;
       const series = (showClaude ? 1 : 0) + (showCopilot ? 1 : 0);
@@ -294,7 +285,7 @@
         };
         let offset = 0;
         if (showClaude) { draw(d.cost, usd.top, baseX, "claude-code"); offset = bw + gap; }
-        if (showCopilot) draw(d.units, aiu.top, baseX + offset, "copilot-cli");
+        if (showCopilot) draw(d.copilotUsd, usd.top, baseX + offset, "copilot-cli");
         if (i % labelEvery === 0) svg.append(el("text", { x: L + i * slot + slot / 2, y: H - 6, "text-anchor": "middle" }, fmtDate(d.d)));
       });
     }
