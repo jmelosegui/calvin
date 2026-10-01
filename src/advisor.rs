@@ -515,7 +515,9 @@ fn run_copilot_cli(
 /// Claude Code, kept lean and contained: no tools, MCP servers, skills or hooks, calvin's
 /// own system prompt, nothing saved to session history, and a spending cap.
 fn run_cursor(job: &Arc<Mutex<Job>>, settings: &CursorAdvisor, prompt: &str) -> Result<()> {
-    let mut cmd = Command::new(&settings.program);
+    let program =
+        find_program(&settings.program).unwrap_or_else(|| PathBuf::from(&settings.program));
+    let mut cmd = Command::new(&program);
     cmd.current_dir(workdir()?)
         .args(["-p", "--mode", "ask", "--output-format", "text"])
         .args(

@@ -288,11 +288,25 @@ pub fn find_program(program: &str) -> Option<PathBuf> {
     } else {
         &[""]
     };
-    std::env::split_paths(&std::env::var_os("PATH")?).find_map(|dir| {
-        exts.iter()
-            .map(|ext| dir.join(format!("{program}{ext}")))
-            .find(|p| p.is_file())
-    })
+    let on_path = std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path).find_map(|dir| {
+            exts.iter()
+                .map(|ext| dir.join(format!("{program}{ext}")))
+                .find(|p| p.is_file())
+        })
+    });
+    if on_path.is_some() {
+        return on_path;
+    }
+    if cfg!(windows) && matches!(program, "agent" | "cursor-agent") {
+        return std::env::var_os("LOCALAPPDATA").and_then(|local| {
+            let dir = PathBuf::from(local).join("cursor-agent");
+            exts.iter()
+                .map(|ext| dir.join(format!("{program}{ext}")))
+                .find(|p| p.is_file())
+        });
+    }
+    None
 }
 
 pub fn db_path() -> Result<PathBuf> {
