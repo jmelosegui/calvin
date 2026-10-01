@@ -155,7 +155,11 @@ fn normalized_timeline(conn: &Connection, session_id: &str) -> Result<Vec<Event>
                 NULL, NULL, NULL, NULL, NULL, NULL
          FROM prompts WHERE session_id = ?1
          UNION ALL
-         SELECT ts, 1, 'tool', id, NULL, NULL, tool, input_json, outcome, request_id,
+         SELECT ts, 1, 'text', id, NULL, text, NULL, NULL, NULL, request_id,
+                NULL, NULL
+         FROM assistant_messages WHERE session_id = ?1
+         UNION ALL
+         SELECT ts, 2, 'tool', id, NULL, NULL, tool, input_json, outcome, request_id,
                 duration_ms, result_detail
          FROM tool_calls WHERE session_id = ?1
          ORDER BY ts, sort",
@@ -175,6 +179,12 @@ fn normalized_timeline(conn: &Connection, session_id: &str) -> Result<Vec<Event>
                     .rsplit_once(":turn:")
                     .and_then(|(_, value)| value.parse().ok()),
             })
+        } else if event_type == "text" {
+            Ok(Event::Item(Item::Text {
+                ts: r.get(0)?,
+                text: r.get(5)?,
+                request_id: r.get(9)?,
+            }))
         } else {
             let tool: String = r.get(6)?;
             let input: Option<String> = r.get(7)?;

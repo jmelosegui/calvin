@@ -90,6 +90,7 @@ fn parse_assistant(
             skill: str_at(v, "attributionSkill"),
             effort: str_at(v, "effort"),
             turn_index: None,
+            duration_ms: None,
             is_sidechain,
         }));
     }

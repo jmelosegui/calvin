@@ -4,6 +4,7 @@
 //! - `CALVIN_DATA_DIR`: directory for the database and state files
 //! - `CALVIN_CONFIG`: path to config.toml
 //! - `CLAUDE_CONFIG_DIR`: Claude Code's own override for `~/.claude`
+//! - `CURSOR_STATE_DB`: Cursor's global `state.vscdb`
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -28,12 +29,13 @@ pub struct Config {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AdvisorConfig {
-    /// `claude-code`, `copilot-cli` or `command`.
+    /// `claude-code`, `copilot-cli`, `cursor` or `command`.
     pub provider: String,
     #[serde(rename = "claude-code")]
     pub claude_code: ClaudeCodeAdvisor,
     #[serde(rename = "copilot-cli")]
     pub copilot_cli: CopilotCliAdvisor,
+    pub cursor: CursorAdvisor,
     pub command: CommandAdvisor,
 }
 
@@ -43,6 +45,7 @@ impl Default for AdvisorConfig {
             provider: "claude-code".into(),
             claude_code: ClaudeCodeAdvisor::default(),
             copilot_cli: CopilotCliAdvisor::default(),
+            cursor: CursorAdvisor::default(),
             command: CommandAdvisor::default(),
         }
     }
@@ -95,6 +98,25 @@ impl Default for CopilotCliAdvisor {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct CursorAdvisor {
+    /// The standalone Cursor Agent CLI executable.
+    pub program: String,
+    pub model: String,
+    pub docs_index: String,
+}
+
+impl Default for CursorAdvisor {
+    fn default() -> Self {
+        Self {
+            program: "agent".into(),
+            model: "auto".into(),
+            docs_index: "https://cursor.com/docs/llms.txt".into(),
+        }
+    }
+}
+
 /// Any tool that reads a prompt on stdin and writes its answer to stdout.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
@@ -134,6 +156,10 @@ pub struct PathsConfig {
     pub claude_dir: Option<PathBuf>,
     /// GitHub Copilot CLI data directory (defaults to `~/.copilot`).
     pub copilot_dir: Option<PathBuf>,
+    /// Cursor's user data directory (defaults to `~/.cursor`).
+    pub cursor_dir: Option<PathBuf>,
+    /// Cursor's global SQLite state database.
+    pub cursor_state_db: Option<PathBuf>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -189,6 +215,32 @@ impl Config {
             .map(expand_home)
             .unwrap_or(home()?.join(".copilot")))
     }
+
+    pub fn cursor_dir(&self) -> Result<PathBuf> {
+        Ok(self
+            .paths
+            .cursor_dir
+            .as_deref()
+            .map(expand_home)
+            .unwrap_or(home()?.join(".cursor")))
+    }
+
+    pub fn cursor_state_db(&self) -> Result<PathBuf> {
+        if let Some(path) = &self.paths.cursor_state_db {
+            return Ok(expand_home(path));
+        }
+        if let Some(path) = std::env::var_os("CURSOR_STATE_DB") {
+            return Ok(PathBuf::from(path));
+        }
+        let base =
+            BaseDirs::new().ok_or_else(|| anyhow!("could not determine config directory"))?;
+        Ok(base
+            .config_dir()
+            .join("Cursor")
+            .join("User")
+            .join("globalStorage")
+            .join("state.vscdb"))
+    }
 }
 
 fn project_dirs() -> Result<ProjectDirs> {
@@ -236,11 +288,25 @@ pub fn find_program(program: &str) -> Option<PathBuf> {
     } else {
         &[""]
     };
-    std::env::split_paths(&std::env::var_os("PATH")?).find_map(|dir| {
-        exts.iter()
-            .map(|ext| dir.join(format!("{program}{ext}")))
-            .find(|p| p.is_file())
-    })
+    let on_path = std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path).find_map(|dir| {
+            exts.iter()
+                .map(|ext| dir.join(format!("{program}{ext}")))
+                .find(|p| p.is_file())
+        })
+    });
+    if on_path.is_some() {
+        return on_path;
+    }
+    if cfg!(windows) && matches!(program, "agent" | "cursor-agent") {
+        return std::env::var_os("LOCALAPPDATA").and_then(|local| {
+            let dir = PathBuf::from(local).join("cursor-agent");
+            exts.iter()
+                .map(|ext| dir.join(format!("{program}{ext}")))
+                .find(|p| p.is_file())
+        });
+    }
+    None
 }
 
 pub fn db_path() -> Result<PathBuf> {

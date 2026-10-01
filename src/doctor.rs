@@ -9,6 +9,7 @@ pub fn run(cfg: &Config, conn: &Connection) -> Result<()> {
     let db = config::db_path()?;
     let claude = cfg.claude_dir()?;
     let copilot = cfg.copilot_dir()?;
+    let cursor_state = cfg.cursor_state_db()?;
     println!("Database      {}", db.display());
     if let Ok(meta) = std::fs::metadata(&db) {
         println!("              {:.1} MB", meta.len() as f64 / 1e6);
@@ -48,7 +49,8 @@ pub fn run(cfg: &Config, conn: &Connection) -> Result<()> {
         let (files, lines, requests): (i64, i64, i64) = conn.query_row(
             "SELECT (SELECT COUNT(*) FROM files WHERE harness = 'claude-code'),
                     (SELECT COALESCE(SUM(lines), 0) FROM raw_chunks),
-                    (SELECT COUNT(*) FROM requests)",
+                    (SELECT COUNT(*) FROM requests r JOIN sessions s ON s.id = r.session_id
+                     WHERE s.harness = 'claude-code')",
             [],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )?;
@@ -95,10 +97,30 @@ pub fn run(cfg: &Config, conn: &Connection) -> Result<()> {
         println!("Copilot CLI   not found at {}", copilot.display());
     }
 
+    if cursor_state.is_file() {
+        let (sessions, requests, tools): (i64, i64, i64) = conn.query_row(
+            "SELECT
+                 (SELECT COUNT(*) FROM sessions WHERE harness = 'cursor'),
+                 (SELECT COUNT(*) FROM requests r JOIN sessions s ON s.id = r.session_id
+                  WHERE s.harness = 'cursor'),
+                 (SELECT COUNT(*) FROM tool_calls t JOIN sessions s ON s.id = t.session_id
+                  WHERE s.harness = 'cursor')",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        println!();
+        println!("Cursor        {}", cursor_state.display());
+        println!("              {sessions} sessions, {requests} requests, {tools} tool calls");
+    } else {
+        println!();
+        println!("Cursor        not found at {}", cursor_state.display());
+    }
+
     let unpriced: Vec<String> = conn
         .prepare(
             "SELECT DISTINCT r.model FROM requests r JOIN sessions s ON s.id = r.session_id
-             WHERE r.cost_usd IS NULL AND r.model IS NOT NULL AND s.harness = 'claude-code'",
+             WHERE r.cost_usd IS NULL AND r.model IS NOT NULL
+               AND s.harness IN ('claude-code', 'cursor')",
         )?
         .query_map([], |r| r.get(0))?
         .collect::<Result<_, _>>()?;

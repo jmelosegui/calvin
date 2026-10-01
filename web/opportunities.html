@@ -100,6 +100,9 @@
     .custom .wide { flex: 1; }
     .adv-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
     .adv-note { color: var(--muted); font-size: 13px; }
+    .adv-note a { color: var(--orange-ink); font-weight: 600; text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--orange) 55%, transparent); text-underline-offset: 3px; }
+    .adv-note a:hover, .adv-note a:focus-visible { color: var(--orange); text-decoration-color: currentColor; }
+    .adv-note a:focus-visible { outline: 1px solid var(--orange); outline-offset: 3px; border-radius: 2px; }
     .btn:disabled { opacity: 0.5; cursor: default; }
     .progress { display: none; margin-top: 16px; padding: 12px 14px; border: 1px dashed var(--line-dim); border-radius: 10px; }
     .progress.show { display: block; }
@@ -122,7 +125,7 @@
     .past button { display: block; width: 100%; text-align: left; padding: 7px 0; border: 0; border-bottom: 1px dashed var(--line-dim); background: none; color: var(--text); font: 500 13px "Outfit", sans-serif; cursor: pointer; }
     .past button:hover { color: var(--orange-ink); }
     .past button span { color: var(--muted); margin-left: 8px; font-size: 12px; }
-    .past button::before { content: "B8"; display: inline-block; width: 16px; color: var(--faint); transition: transform 0.15s; }
+    .past button::before { content: ""; display: inline-block; width: 0; height: 0; margin: 0 8px 0 2px; border-top: 4px solid transparent; border-bottom: 4px solid transparent; border-left: 6px solid currentColor; color: var(--faint); transform-origin: 3px 4px; transition: transform 0.15s; }
     .past button.expanded::before { transform: rotate(90deg); color: var(--orange); }
     .past button.expanded { color: var(--orange-ink); }
     .pastplan { margin: 0 0 12px; padding: 12px 16px 4px 16px; border-left: 2px solid var(--orange); background: var(--btn); border-radius: 0 8px 8px 0; }
@@ -160,6 +163,7 @@
           <option value="">All tools</option>
           <option value="claude-code">Claude Code</option>
           <option value="copilot-cli">Copilot CLI</option>
+          <option value="cursor">Cursor</option>
           <option value="cross-tool">Cross-tool</option>
         </select>
       </label>
@@ -199,7 +203,7 @@
 
   <main id="main"><section class="panel"><div class="empty">Checking your setup…</div></section></main>
 
-  <footer>Checked against your local Claude Code and Copilot CLI data, settings and projects. Nothing is changed for you.</footer>
+  <footer>Checked against your local Claude Code, Copilot CLI and Cursor data, settings and projects. Nothing is changed for you.</footer>
 
   <dialog id="odialog" class="odialog"><div class="dh"><b>Recommendation</b><button class="btn" id="oclose">Close</button></div><div class="obody" id="obody"></div></dialog>
   <dialog id="dialog"><div class="dh"><b id="dtitle"></b><button class="btn" id="dcopy">Copy</button><button class="btn" id="dclose">Close</button></div><pre id="dbody"></pre></dialog>
@@ -245,8 +249,8 @@
     }
 
     const STATUS = { action: "Worth doing", consider: "Worth a look", good: "In place" };
-    const scopeOf = (o) => o.id.startsWith("copilot-") ? "copilot-cli" : o.area === "Cross-tool" ? "cross-tool" : "claude-code";
-    const SCOPE = { "claude-code": "Claude Code", "copilot-cli": "Copilot CLI", "cross-tool": "Cross-tool" };
+    const scopeOf = (o) => o.id.startsWith("copilot-") ? "copilot-cli" : o.id.startsWith("cursor-") ? "cursor" : o.area === "Cross-tool" ? "cross-tool" : "claude-code";
+    const SCOPE = { "claude-code": "Claude Code", "copilot-cli": "Copilot CLI", cursor: "Cursor", "cross-tool": "Cross-tool" };
     const scopedItems = () => items.filter((o) => !selectedScope || scopeOf(o) === selectedScope);
     const visibleItems = () => scopedItems().filter((o) => !selectedArea || o.area === selectedArea);
 
@@ -382,7 +386,10 @@
     async function initAdvisor() {
       providers = await fetch("/api/advisor/providers").then((r) => r.json());
       const sel = $("#provider");
-      sel.innerHTML = providers.map((p) => `<option value="${p.id}" ${p.selected ? "selected" : ""}>${esc(p.name)}${p.available ? "" : " (not set up)"}</option>`).join("");
+      sel.innerHTML = providers.map((p) => {
+        const unavailable = p.id === "command" ? "not configured" : "not installed";
+        return `<option value="${p.id}" ${p.selected ? "selected" : ""}>${esc(p.name)}${p.available ? "" : ` (${unavailable})`}</option>`;
+      }).join("");
       sel.onchange = () => chooseProvider(sel.value);
       updateAdvisorUi();
       loadPast();
@@ -397,7 +404,18 @@
       $("#custom").classList.toggle("show", isCustom && !p.available);
       $("#ask").textContent = `Ask ${p ? p.name : "the advisor"} to prioritize these opportunities`;
       $("#ask").disabled = !p || !p.available || polling !== null;
-      $("#advnote").textContent = !p ? "" : p.available ? `Plan writer only · ${p.detail}` : isCustom ? "Set the plan-writer command below." : `${p.name} was not found on this machine.`;
+      const note = $("#advnote");
+      if (!p) {
+        note.textContent = "";
+      } else if (p.available) {
+        note.textContent = `Plan writer only · ${p.detail}`;
+      } else if (isCustom) {
+        note.textContent = "Set the plan-writer command below.";
+      } else if (p.id === "cursor") {
+        note.innerHTML = `Cursor Desktop analytics are connected. The optional standalone Cursor Agent CLI is not installed, so Calvin cannot use it to write plans. <a href="https://cursor.com/docs/cli/installation" target="_blank" rel="noreferrer">Install Cursor Agent CLI</a>.`;
+      } else {
+        note.textContent = `${p.name} was not found on this machine. Select an installed plan writer.`;
+      }
     }
 
     async function chooseProvider(id, custom) {

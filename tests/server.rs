@@ -24,6 +24,8 @@ fn app() -> (tempfile::TempDir, axum::Router) {
         db_path,
         claude,
         tmp.path().join("copilot"),
+        tmp.path().join("cursor"),
+        tmp.path().join("cursor-state.vscdb"),
         SkillFolders::default(),
         PriceTable::bundled(),
         "secret".into(),
@@ -174,12 +176,47 @@ async fn daily_billing_keeps_copilot_ai_units_separate() {
 }
 
 #[tokio::test]
+async fn cursor_is_a_supported_provider_filter() {
+    let (tmp, app) = app();
+    let conn = db::open(&tmp.path().join("calvin.db")).unwrap();
+    conn.execute(
+        "INSERT INTO sessions (id, harness, started_at)
+         VALUES ('cursor:thread', 'cursor', '2026-09-30T12:00:00Z')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO requests
+         (request_id, session_id, ts, model, input_tokens, output_tokens, is_sidechain)
+         VALUES ('cursor:request', 'cursor:thread', '2026-09-30T12:01:00Z',
+                 'claude-4.5-sonnet-thinking', 100, 20, 0)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    let res = app
+        .oneshot(get(
+            "/api/summary?since=all&harness=cursor",
+            "127.0.0.1:1982",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let summary: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(summary["sessions"], 1);
+    assert_eq!(summary["requests"], 1);
+}
+
+#[tokio::test]
 async fn advisor_preview_requires_docs_for_every_harness() {
     let (tmp, app) = app();
     let conn = db::open(&tmp.path().join("calvin.db")).unwrap();
     conn.execute(
         "INSERT INTO sessions (id, harness, started_at)
-         VALUES ('copilot-cli:test', 'copilot-cli', '2026-09-30T12:00:00Z')",
+         VALUES ('copilot-cli:test', 'copilot-cli', '2026-09-30T12:00:00Z'),
+                ('cursor:test', 'cursor', '2026-09-30T12:00:00Z')",
         [],
     )
     .unwrap();
@@ -199,6 +236,7 @@ async fn advisor_preview_requires_docs_for_every_harness() {
     assert!(prompt.contains(
         "https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference"
     ));
+    assert!(prompt.contains("https://cursor.com/docs/llms.txt"));
 }
 
 #[tokio::test]

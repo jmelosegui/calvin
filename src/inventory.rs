@@ -419,6 +419,150 @@ pub fn copilot_markdown(conn: &Connection, since: &Since, copilot_dir: &Path) ->
     Ok(out)
 }
 
+pub fn cursor_markdown(
+    conn: &Connection,
+    since: &Since,
+    cursor_dir: &Path,
+    cursor_state_db: &Path,
+) -> Result<String> {
+    let sessions: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sessions WHERE harness = 'cursor' AND started_at >= ?1",
+        [&since.0],
+        |row| row.get(0),
+    )?;
+    if sessions == 0 {
+        return Ok(String::new());
+    }
+    let query_counts = |sql: &str| -> Result<Vec<(String, i64)>> {
+        let mut statement = conn.prepare(sql)?;
+        Ok(statement
+            .query_map([&since.0], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<_, _>>()?)
+    };
+    let tools = query_counts(
+        "SELECT t.tool, COUNT(*) FROM tool_calls t JOIN sessions s ON s.id = t.session_id
+         WHERE s.harness = 'cursor' AND t.ts >= ?1 GROUP BY t.tool ORDER BY 2 DESC, 1",
+    )?;
+    let models = query_counts(
+        "SELECT r.model, COUNT(*) FROM requests r JOIN sessions s ON s.id = r.session_id
+         WHERE s.harness = 'cursor' AND r.ts >= ?1 AND r.model IS NOT NULL
+         GROUP BY r.model ORDER BY 2 DESC, 1",
+    )?;
+    let modes = query_counts(
+        "SELECT lower(m.mode), COUNT(*) FROM session_modes m
+         JOIN sessions s ON s.id = m.session_id
+         WHERE s.harness = 'cursor' AND m.ts >= ?1
+         GROUP BY lower(m.mode) ORDER BY 2 DESC, 1",
+    )?;
+    let mut commands = BTreeMap::<String, i64>::new();
+    let mut statement = conn.prepare(
+        "SELECT p.text FROM prompts p JOIN sessions s ON s.id = p.session_id
+         WHERE s.harness = 'cursor' AND p.kind = 'command' AND p.ts >= ?1",
+    )?;
+    for row in statement.query_map([&since.0], |row| row.get::<_, String>(0))? {
+        let text = row?;
+        let command = text.split_whitespace().next().unwrap_or(&text).to_string();
+        *commands.entry(command).or_default() += 1;
+    }
+    let mut roots = BTreeSet::new();
+    let mut statement = conn.prepare(
+        "SELECT DISTINCT cwd FROM sessions
+         WHERE harness = 'cursor' AND cwd IS NOT NULL AND started_at >= ?1",
+    )?;
+    for row in statement.query_map([&since.0], |row| row.get::<_, String>(0))? {
+        roots.insert(inventory_repo_root(&PathBuf::from(row?)));
+    }
+    let count_entries = |dir: &Path| {
+        std::fs::read_dir(dir)
+            .map(|entries| entries.filter_map(Result::ok).count())
+            .unwrap_or(0)
+    };
+    let settings = cursor_state_db
+        .parent()
+        .and_then(Path::parent)
+        .map(|user| read_json(&user.join("settings.json")))
+        .unwrap_or(Value::Null);
+    let mut setting_keys = settings
+        .as_object()
+        .map(|object| object.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    setting_keys.sort();
+    let cli_config = read_json(&cursor_dir.join("cli-config.json"));
+    let mut cli_keys = cli_config
+        .as_object()
+        .map(|object| object.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    cli_keys.sort();
+    let mut mcp_servers = read_json(&cursor_dir.join("mcp.json"))
+        .get("mcpServers")
+        .and_then(Value::as_object)
+        .map(|object| object.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    mcp_servers.sort();
+    let agents = count_entries(&cursor_dir.join("agents"))
+        + roots
+            .iter()
+            .map(|root| count_entries(&root.join(".cursor").join("agents")))
+            .sum::<usize>();
+    let skills = count_entries(&cursor_dir.join("skills-cursor"))
+        + roots
+            .iter()
+            .map(|root| count_entries(&root.join(".cursor").join("skills")))
+            .sum::<usize>();
+    let rules = count_entries(&cursor_dir.join("rules"))
+        + roots
+            .iter()
+            .map(|root| count_entries(&root.join(".cursor").join("rules")))
+            .sum::<usize>();
+    let hooks = usize::from(cursor_dir.join("hooks.json").is_file())
+        + roots
+            .iter()
+            .filter(|root| root.join(".cursor").join("hooks.json").is_file())
+            .count();
+    let worktree_setups = roots
+        .iter()
+        .filter(|root| root.join(".cursor").join("worktrees.json").is_file())
+        .count();
+
+    let mut out = String::from("## How you use Cursor today\n");
+    out.push_str(&format!("- Tools used (calls): {}\n", list(&tools)));
+    out.push_str(&format!("- Models used (requests): {}\n", list(&models)));
+    out.push_str(&format!("- Modes entered: {}\n", list(&modes)));
+    out.push_str(&format!(
+        "- Slash commands typed: {}\n",
+        list(&commands.into_iter().collect::<Vec<_>>())
+    ));
+    out.push_str(&format!(
+        "- Cursor settings in use (keys only): {}\n",
+        if setting_keys.is_empty() {
+            "none".into()
+        } else {
+            setting_keys.join(", ")
+        }
+    ));
+    out.push_str(&format!(
+        "- Cursor CLI config in use (keys only): {}\n",
+        if cli_keys.is_empty() {
+            "none".into()
+        } else {
+            cli_keys.join(", ")
+        }
+    ));
+    out.push_str(&format!(
+        "- MCP servers configured (names only): {}\n",
+        if mcp_servers.is_empty() {
+            "none".into()
+        } else {
+            mcp_servers.join(", ")
+        }
+    ));
+    out.push_str(&format!(
+        "- Cursor customization: {rules} rule file(s), {hooks} hooks file(s), {agents} custom subagent(s), {skills} skill(s), {worktree_setups} worktree setup file(s)\n"
+    ));
+    out.push_str("- Official documentation: https://cursor.com/docs/llms.txt\n");
+    Ok(out)
+}
+
 fn entry_names(dir: &Path) -> Vec<String> {
     std::fs::read_dir(dir)
         .map(|entries| {
