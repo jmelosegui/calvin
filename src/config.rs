@@ -4,6 +4,7 @@
 //! - `CALVIN_DATA_DIR`: directory for the database and state files
 //! - `CALVIN_CONFIG`: path to config.toml
 //! - `CLAUDE_CONFIG_DIR`: Claude Code's own override for `~/.claude`
+//! - `CURSOR_STATE_DB`: Cursor's global `state.vscdb`
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -134,6 +135,10 @@ pub struct PathsConfig {
     pub claude_dir: Option<PathBuf>,
     /// GitHub Copilot CLI data directory (defaults to `~/.copilot`).
     pub copilot_dir: Option<PathBuf>,
+    /// Cursor's user data directory (defaults to `~/.cursor`).
+    pub cursor_dir: Option<PathBuf>,
+    /// Cursor's global SQLite state database.
+    pub cursor_state_db: Option<PathBuf>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -188,6 +193,32 @@ impl Config {
             .as_deref()
             .map(expand_home)
             .unwrap_or(home()?.join(".copilot")))
+    }
+
+    pub fn cursor_dir(&self) -> Result<PathBuf> {
+        Ok(self
+            .paths
+            .cursor_dir
+            .as_deref()
+            .map(expand_home)
+            .unwrap_or(home()?.join(".cursor")))
+    }
+
+    pub fn cursor_state_db(&self) -> Result<PathBuf> {
+        if let Some(path) = &self.paths.cursor_state_db {
+            return Ok(expand_home(path));
+        }
+        if let Some(path) = std::env::var_os("CURSOR_STATE_DB") {
+            return Ok(PathBuf::from(path));
+        }
+        let base =
+            BaseDirs::new().ok_or_else(|| anyhow!("could not determine config directory"))?;
+        Ok(base
+            .config_dir()
+            .join("Cursor")
+            .join("User")
+            .join("globalStorage")
+            .join("state.vscdb"))
     }
 }
 

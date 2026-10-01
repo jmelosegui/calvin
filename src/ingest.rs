@@ -3,17 +3,19 @@
 //! Each file's read position is stored, so re-running only reads new lines. Only complete
 //! lines (ending in `\n`) are consumed; a line still being written is picked up next time.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
 use anyhow::{Context, Result};
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::types::Value as SqlValue;
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde_json::Value;
 use walkdir::WalkDir;
 
-use crate::adapters::{claude_code, copilot_cli};
+use crate::adapters::{claude_code, copilot_cli, cursor};
 use crate::event::*;
 use crate::prices::PriceTable;
 
@@ -41,11 +43,13 @@ pub fn ingest_all(
     conn: &mut Connection,
     claude_dir: &Path,
     copilot_dir: &Path,
+    cursor_state_db: &Path,
     prices: &PriceTable,
     progress: &mut dyn Progress,
 ) -> Result<Stats> {
     let mut stats = ingest_claude_code(conn, claude_dir, prices, progress)?;
     stats.add(ingest_copilot_cli(conn, copilot_dir, progress)?);
+    stats.add(ingest_cursor(conn, cursor_state_db, prices, progress)?);
     Ok(stats)
 }
 
@@ -107,7 +111,7 @@ pub fn ingest_claude_code(
             }
             stats.files_seen += 1;
             if todo > 0 {
-                let tx = conn.transaction()?;
+                let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
                 if ingest_file(&tx, &path, &mut stats)
                     .with_context(|| format!("ingesting {}", path.display()))?
                 {
@@ -166,7 +170,7 @@ pub fn ingest_copilot_cli(
         }
         stats.files_seen += 1;
         if todo > 0 {
-            let tx = conn.transaction()?;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             if ingest_copilot_event_file(&tx, &path, &mut stats)? {
                 stats.files_read += 1;
             }
@@ -178,11 +182,324 @@ pub fn ingest_copilot_cli(
     Ok(stats)
 }
 
+/// Import Cursor sessions from its global SQLite state store.
+pub fn ingest_cursor(
+    conn: &mut Connection,
+    state_db: &Path,
+    prices: &PriceTable,
+    progress: &mut dyn Progress,
+) -> Result<Stats> {
+    let mut stats = Stats::default();
+    if !state_db.is_file() {
+        return Ok(stats);
+    }
+    stats.files_seen = 1;
+    let metadata = std::fs::metadata(state_db)?;
+    let size = metadata.len() as i64;
+    let mtime = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |duration| duration.as_secs() as i64);
+    let source_key = state_db.to_string_lossy().into_owned();
+    let known: Option<(i64, i64, i64)> = conn
+        .query_row(
+            "SELECT offset, mtime, size FROM files WHERE path = ?1 AND harness = ?2",
+            params![source_key, cursor::HARNESS],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    if known.is_some_and(|(_, old_mtime, old_size)| old_mtime == mtime && old_size == size) {
+        return Ok(stats);
+    }
+
+    progress.start(metadata.len());
+    let source = Connection::open_with_flags(
+        state_db,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+            | rusqlite::OpenFlags::SQLITE_OPEN_URI
+            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("opening Cursor state {}", state_db.display()))?;
+    source.busy_timeout(std::time::Duration::from_secs(10))?;
+
+    let checkpoint = known
+        .filter(|(_, _, old_size)| *old_size <= size)
+        .map_or(0, |(offset, _, _)| offset);
+    let headers = cursor_headers(&source)?;
+    let mut composers = all_cursor_composers(&source)?;
+    if checkpoint > 0 {
+        composers.retain(|composer| {
+            let updated = cursor::updated_at(composer).max(
+                cursor::composer_id(composer)
+                    .and_then(|id| headers.get(id))
+                    .map_or(0, cursor::updated_at),
+            );
+            updated > checkpoint
+        });
+    }
+    let workspaces = cursor_workspaces(state_db);
+    let mut max_updated = checkpoint;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    for composer in composers {
+        if progress.should_stop() {
+            break;
+        }
+        let Some(native_id) = cursor::composer_id(&composer) else {
+            continue;
+        };
+        let header = headers.get(native_id);
+        let updated = cursor::updated_at(&composer).max(header.map_or(0, cursor::updated_at));
+        max_updated = max_updated.max(updated);
+        let workspace = cursor::workspace_identifier(&composer)
+            .or_else(|| header.and_then(cursor::workspace_identifier));
+        let cwd = workspace.and_then(|id| resolve_cursor_workspace(id, &workspaces));
+        let bubbles = cursor_bubbles(&source, native_id, &cursor::bubble_ids(&composer))?;
+        stats.lines += bubbles.len() + 1;
+        for event in cursor::events(&composer, header, cwd, &bubbles) {
+            write_event(&tx, cursor::HARNESS, &event)?;
+        }
+    }
+    tx.prepare_cached(
+        "INSERT INTO files (path, harness, size, offset, mtime, ingested_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+         ON CONFLICT(path) DO UPDATE SET harness = excluded.harness, size = excluded.size,
+             offset = excluded.offset, mtime = excluded.mtime, ingested_at = excluded.ingested_at",
+    )?
+    .execute(params![
+        source_key,
+        cursor::HARNESS,
+        size,
+        max_updated,
+        mtime
+    ])?;
+    tx.commit()?;
+    stats.files_read = 1;
+    reprice(conn, prices)?;
+    progress.advance(metadata.len());
+    progress.finish();
+    Ok(stats)
+}
+
+fn cursor_headers(source: &Connection) -> Result<HashMap<String, Value>> {
+    let has_table: bool = source.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'composerHeaders'
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_table {
+        let mut statement = source.prepare(
+            "SELECT composerId, workspaceId, createdAt, lastUpdatedAt, value
+             FROM composerHeaders",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+                row.get::<_, Option<i64>>(3)?,
+                row.get::<_, Option<SqlValue>>(4)?,
+            ))
+        })?;
+        let mut headers = HashMap::new();
+        for row in rows {
+            let (id, workspace_id, created_at, updated_at, raw) = row?;
+            let mut value = raw
+                .and_then(sqlite_bytes)
+                .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
+                .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+            if let Some(object) = value.as_object_mut() {
+                object.insert("composerId".into(), Value::String(id.clone()));
+                if let Some(workspace_id) = workspace_id {
+                    object.insert("workspaceIdentifier".into(), Value::String(workspace_id));
+                }
+                if let Some(created_at) = created_at {
+                    object.insert("createdAt".into(), Value::from(created_at));
+                }
+                if let Some(updated_at) = updated_at {
+                    object.insert("lastUpdatedAt".into(), Value::from(updated_at));
+                }
+            }
+            headers.insert(id, value);
+        }
+        return Ok(headers);
+    }
+
+    let raw: Option<SqlValue> = source
+        .query_row(
+            "SELECT value FROM ItemTable WHERE key = 'composer.composerHeaders'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(raw) = raw.and_then(sqlite_bytes) else {
+        return Ok(HashMap::new());
+    };
+    let value: Value = serde_json::from_slice(&raw).context("parsing Cursor composer headers")?;
+    let values = value
+        .as_array()
+        .or_else(|| value.get("headers").and_then(Value::as_array))
+        .into_iter()
+        .flatten();
+    Ok(values
+        .filter_map(|header| cursor::composer_id(header).map(|id| (id.to_string(), header.clone())))
+        .collect())
+}
+
+fn all_cursor_composers(source: &Connection) -> Result<Vec<Value>> {
+    let mut statement = source.prepare(
+        "SELECT value FROM cursorDiskKV
+         WHERE key >= 'composerData:' AND key < 'composerData;'",
+    )?;
+    let values = statement.query_map([], |row| row.get::<_, SqlValue>(0))?;
+    let mut composers = Vec::new();
+    for raw in values {
+        let Some(raw) = sqlite_bytes(raw?) else {
+            continue;
+        };
+        if let Ok(value) = serde_json::from_slice::<Value>(&raw)
+            && cursor::composer_id(&value).is_some()
+            && !cursor::bubble_ids(&value).is_empty()
+        {
+            composers.push(value);
+        }
+    }
+    Ok(composers)
+}
+
+fn cursor_bubbles(source: &Connection, composer_id: &str, order: &[String]) -> Result<Vec<Value>> {
+    let prefix = format!("bubbleId:{composer_id}:");
+    let upper = format!("{prefix}\u{10ffff}");
+    let mut statement = source.prepare(
+        "SELECT key, value FROM cursorDiskKV
+         WHERE key >= ?1 AND key < ?2",
+    )?;
+    let rows = statement.query_map(params![prefix, upper], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, SqlValue>(1)?))
+    })?;
+    let mut values: HashMap<String, Value> = HashMap::new();
+    for row in rows {
+        let (key, raw) = row?;
+        if let Some(raw) = sqlite_bytes(raw)
+            && let Ok(value) = serde_json::from_slice(&raw)
+            && let Some(id) = key.strip_prefix(&prefix)
+        {
+            values.insert(id.to_string(), value);
+        }
+    }
+    if order.is_empty() {
+        let mut bubbles: Vec<_> = values.into_values().collect();
+        bubbles.sort_by_key(|bubble| {
+            bubble
+                .get("createdAt")
+                .map(Value::to_string)
+                .unwrap_or_default()
+        });
+        return Ok(bubbles);
+    }
+    let mut bubbles: Vec<_> = order.iter().filter_map(|id| values.remove(id)).collect();
+    let mut unindexed: Vec<_> = values.into_values().collect();
+    unindexed.sort_by_key(|bubble| {
+        bubble
+            .get("createdAt")
+            .map(Value::to_string)
+            .unwrap_or_default()
+    });
+    bubbles.extend(unindexed);
+    Ok(bubbles)
+}
+
+fn cursor_workspaces(state_db: &Path) -> HashMap<String, String> {
+    let Some(user_dir) = state_db.parent().and_then(Path::parent) else {
+        return HashMap::new();
+    };
+    let root = user_dir.join("workspaceStorage");
+    if !root.is_dir() {
+        return HashMap::new();
+    }
+    let mut workspaces = HashMap::new();
+    for entry in WalkDir::new(root)
+        .min_depth(2)
+        .max_depth(2)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file() && entry.file_name() == "workspace.json")
+    {
+        let Ok(raw) = std::fs::read(entry.path()) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_slice::<Value>(&raw) else {
+            continue;
+        };
+        let Some(location) = value
+            .get("folder")
+            .or_else(|| value.get("workspace"))
+            .and_then(Value::as_str)
+            .and_then(file_uri_path)
+        else {
+            continue;
+        };
+        if let Some(id) = entry.path().parent().and_then(Path::file_name) {
+            workspaces.insert(id.to_string_lossy().into_owned(), location.clone());
+        }
+        if let Some(identifier) = value.get("workspaceIdentifier").and_then(Value::as_str) {
+            workspaces.insert(identifier.to_string(), location);
+        }
+    }
+    workspaces
+}
+
+fn resolve_cursor_workspace(id: &str, workspaces: &HashMap<String, String>) -> Option<String> {
+    file_uri_path(id).or_else(|| workspaces.get(id).cloned())
+}
+
+fn file_uri_path(value: &str) -> Option<String> {
+    let encoded = value.strip_prefix("file://")?;
+    let bytes = encoded.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let Ok(hex) = u8::from_str_radix(&encoded[index + 1..index + 3], 16)
+        {
+            decoded.push(hex);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    let mut path = String::from_utf8(decoded).ok()?;
+    // `file:///C:/…` describes a Windows path wherever it is parsed, so the drive letter is
+    // detected from the URI itself. Keying this off the host would rewrite the separators of
+    // imported data differently on each platform.
+    let bytes = path.as_bytes();
+    let windows_drive = bytes.first() == Some(&b'/')
+        && bytes.get(1).is_some_and(u8::is_ascii_alphabetic)
+        && bytes.get(2) == Some(&b':');
+    if windows_drive {
+        path.remove(0);
+        return Some(path.replace('/', "\\"));
+    }
+    Some(path)
+}
+
+fn sqlite_bytes(value: SqlValue) -> Option<Vec<u8>> {
+    match value {
+        SqlValue::Text(text) => Some(text.into_bytes()),
+        SqlValue::Blob(bytes) => Some(bytes),
+        _ => None,
+    }
+}
+
 fn import_copilot_store(conn: &mut Connection, path: &Path) -> Result<()> {
     let source = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
         .with_context(|| format!("opening {}", path.display()))?;
     source.busy_timeout(std::time::Duration::from_secs(5))?;
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
     {
         let mut rows = source.prepare(
@@ -491,38 +808,74 @@ pub fn write_event(tx: &Transaction, harness: &str, event: &Event) -> Result<()>
                 p.is_sidechain
             ])?;
         }
+        Event::AssistantMessage(m) => {
+            tx.prepare_cached(
+                "INSERT INTO assistant_messages
+                 (id, session_id, request_id, ts, text, turn_index)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(id) DO UPDATE SET
+                     request_id = COALESCE(excluded.request_id, assistant_messages.request_id),
+                     text = excluded.text,
+                     turn_index = COALESCE(excluded.turn_index, assistant_messages.turn_index)",
+            )?
+            .execute(params![
+                m.id,
+                m.session_id,
+                m.request_id,
+                m.ts,
+                m.text,
+                m.turn_index
+            ])?;
+        }
         Event::Request(r) => {
-            let u = r.usage.clone().unwrap_or_default();
+            let input = r.usage.as_ref().map(|usage| usage.input);
+            let output = r.usage.as_ref().map(|usage| usage.output);
+            let cache_read = r.usage.as_ref().map(|usage| usage.cache_read);
+            let cache_write_5m = r.usage.as_ref().map(|usage| usage.cache_write_5m);
+            let cache_write_1h = r.usage.as_ref().map(|usage| usage.cache_write_1h);
             // The same response is logged once per content block with the same usage;
             // MAX keeps the most complete numbers if they ever differ.
             tx.prepare_cached(
                 "INSERT INTO requests (request_id, session_id, ts, model, input_tokens, output_tokens,
-                     cache_read, cache_write_5m, cache_write_1h, skill, is_sidechain, effort, turn_index)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                     cache_read, cache_write_5m, cache_write_1h, skill, is_sidechain, effort,
+                     turn_index, duration_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
                  ON CONFLICT (request_id) DO UPDATE SET
-                     input_tokens = MAX(requests.input_tokens, excluded.input_tokens),
-                     output_tokens = MAX(requests.output_tokens, excluded.output_tokens),
-                     cache_read = MAX(requests.cache_read, excluded.cache_read),
-                     cache_write_5m = MAX(requests.cache_write_5m, excluded.cache_write_5m),
-                     cache_write_1h = MAX(requests.cache_write_1h, excluded.cache_write_1h),
+                     input_tokens = CASE WHEN excluded.input_tokens IS NULL THEN requests.input_tokens
+                         WHEN requests.input_tokens IS NULL THEN excluded.input_tokens
+                         ELSE MAX(requests.input_tokens, excluded.input_tokens) END,
+                     output_tokens = CASE WHEN excluded.output_tokens IS NULL THEN requests.output_tokens
+                         WHEN requests.output_tokens IS NULL THEN excluded.output_tokens
+                         ELSE MAX(requests.output_tokens, excluded.output_tokens) END,
+                     cache_read = CASE WHEN excluded.cache_read IS NULL THEN requests.cache_read
+                         WHEN requests.cache_read IS NULL THEN excluded.cache_read
+                         ELSE MAX(requests.cache_read, excluded.cache_read) END,
+                     cache_write_5m = CASE WHEN excluded.cache_write_5m IS NULL THEN requests.cache_write_5m
+                         WHEN requests.cache_write_5m IS NULL THEN excluded.cache_write_5m
+                         ELSE MAX(requests.cache_write_5m, excluded.cache_write_5m) END,
+                     cache_write_1h = CASE WHEN excluded.cache_write_1h IS NULL THEN requests.cache_write_1h
+                         WHEN requests.cache_write_1h IS NULL THEN excluded.cache_write_1h
+                         ELSE MAX(requests.cache_write_1h, excluded.cache_write_1h) END,
                      skill = COALESCE(requests.skill, excluded.skill),
                      effort = COALESCE(requests.effort, excluded.effort),
-                     turn_index = COALESCE(requests.turn_index, excluded.turn_index)",
+                     turn_index = COALESCE(requests.turn_index, excluded.turn_index),
+                     duration_ms = COALESCE(excluded.duration_ms, requests.duration_ms)",
             )?
             .execute(params![
                 r.request_id,
                 r.session_id,
                 r.ts,
                 r.model,
-                u.input,
-                u.output,
-                u.cache_read,
-                u.cache_write_5m,
-                u.cache_write_1h,
+                input,
+                output,
+                cache_read,
+                cache_write_5m,
+                cache_write_1h,
                 r.skill,
                 r.is_sidechain,
                 r.effort,
-                r.turn_index
+                r.turn_index,
+                r.duration_ms
             ])?;
         }
         Event::ToolCall(t) => {
@@ -572,6 +925,19 @@ pub fn write_event(tx: &Transaction, harness: &str, event: &Event) -> Result<()>
                 ])?;
             }
         }
+        Event::FileTouched(f) => {
+            tx.prepare_cached(
+                "INSERT INTO session_files
+                 (session_id, file_path, tool_name, turn_index, first_seen_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(session_id, file_path) DO UPDATE SET
+                     tool_name = COALESCE(session_files.tool_name, excluded.tool_name),
+                     turn_index = COALESCE(session_files.turn_index, excluded.turn_index),
+                     first_seen_at = MIN(COALESCE(session_files.first_seen_at, excluded.first_seen_at),
+                                         excluded.first_seen_at)",
+            )?
+            .execute(params![f.session_id, f.path, f.tool, f.turn_index, f.ts])?;
+        }
         Event::Interrupted { id, session_id, ts } => {
             tx.prepare_cached(
                 "INSERT OR IGNORE INTO friction (id, session_id, ts, kind) VALUES (?1, ?2, ?3, 'interrupted')",
@@ -609,7 +975,8 @@ pub fn reprice(conn: &Connection, prices: &PriceTable) -> Result<()> {
                          + cache_write_5m * ?4 + cache_write_1h * ?5) / 1000000.0
                      WHERE model = ?6 AND EXISTS (
                          SELECT 1 FROM sessions s
-                         WHERE s.id = requests.session_id AND s.harness = 'claude-code'
+                         WHERE s.id = requests.session_id
+                           AND s.harness IN ('claude-code', 'cursor')
                      )",
                     params![
                         p.input,
@@ -625,7 +992,8 @@ pub fn reprice(conn: &Connection, prices: &PriceTable) -> Result<()> {
                 conn.execute(
                     "UPDATE requests SET cost_usd = NULL WHERE model = ?1 AND EXISTS (
                          SELECT 1 FROM sessions s
-                         WHERE s.id = requests.session_id AND s.harness = 'claude-code'
+                         WHERE s.id = requests.session_id
+                           AND s.harness IN ('claude-code', 'cursor')
                      )",
                     [&model],
                 )?;
@@ -642,4 +1010,32 @@ pub fn project_name(cwd: &str) -> String {
         .next()
         .unwrap_or(cwd)
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Cursor records workspace URIs from the machine that produced them, so the same URI must
+    /// decode to the same path on every platform calvin runs on.
+    #[test]
+    fn file_uris_decode_independently_of_the_host() {
+        assert_eq!(
+            file_uri_path("file:///C%3A/work/calvin").as_deref(),
+            Some(r"C:\work\calvin")
+        );
+        assert_eq!(
+            file_uri_path("file:///C:/work/calvin").as_deref(),
+            Some(r"C:\work\calvin")
+        );
+        assert_eq!(
+            file_uri_path("file:///home/juan/calvin").as_deref(),
+            Some("/home/juan/calvin")
+        );
+        assert_eq!(
+            file_uri_path("file:///work/my%20project").as_deref(),
+            Some("/work/my project")
+        );
+        assert_eq!(file_uri_path("workspace-a"), None);
+    }
 }

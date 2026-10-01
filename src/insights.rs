@@ -71,7 +71,7 @@ pub fn summary(conn: &Connection, since: &Since) -> Result<Summary> {
     )?;
     let s = conn.query_row(
         "SELECT COUNT(*), COALESCE(SUM(r.cost_usd), 0), COALESCE(SUM(r.ai_units), 0),
-                SUM(r.cost_usd IS NULL AND s.harness = 'claude-code'),
+                SUM(r.cost_usd IS NULL AND s.harness IN ('claude-code', 'cursor')),
                 SUM(CASE WHEN s.harness = 'claude-code' THEN r.cache_read ELSE 0 END),
                 SUM(CASE WHEN s.harness = 'claude-code'
                     THEN r.input_tokens + r.cache_read + r.cache_write_5m + r.cache_write_1h

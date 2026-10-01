@@ -63,6 +63,8 @@ pub struct AppState {
     pub db_path: PathBuf,
     pub claude_dir: PathBuf,
     pub copilot_dir: PathBuf,
+    pub cursor_dir: PathBuf,
+    pub cursor_state_db: PathBuf,
     pub skill_folders: SkillFolders,
     skill_index: Mutex<Option<Vec<skills::InstalledSkill>>>,
     /// Which AI tool writes plans; can change from the Opportunities page.
@@ -91,6 +93,8 @@ impl AppState {
         db_path: PathBuf,
         claude_dir: PathBuf,
         copilot_dir: PathBuf,
+        cursor_dir: PathBuf,
+        cursor_state_db: PathBuf,
         skill_folders: SkillFolders,
         prices: PriceTable,
         token: String,
@@ -102,6 +106,8 @@ impl AppState {
             db_path,
             claude_dir,
             copilot_dir,
+            cursor_dir,
+            cursor_state_db,
             skill_folders,
             skill_index: Mutex::new(None),
             advisor: RwLock::new(crate::config::AdvisorConfig::default()),
@@ -234,6 +240,7 @@ pub async fn sync_loop(st: Arc<AppState>) {
                 &mut conn,
                 &s.claude_dir,
                 &s.copilot_dir,
+                &s.cursor_state_db,
                 &s.prices,
                 &mut StopOnShutdown(&s),
             )?
@@ -335,6 +342,7 @@ where
                 let value = match harness.as_str() {
                     "claude-code" => "claude-code",
                     "copilot-cli" => "copilot-cli",
+                    "cursor" => "cursor",
                     _ => anyhow::bail!("unknown harness '{harness}'"),
                 };
                 conn.execute_batch(&format!(
@@ -508,6 +516,7 @@ fn scan_skills(st: &AppState, conn: &Connection) -> Result<Vec<skills::Installed
     Ok(skills::installed(&skills::Locations {
         claude_dir: st.claude_dir.clone(),
         copilot_dir: st.copilot_dir.clone(),
+        cursor_dir: st.cursor_dir.clone(),
         project_dirs: insights::project_dirs(conn)?,
         extra: st.skill_folders.extra.clone(),
     }))

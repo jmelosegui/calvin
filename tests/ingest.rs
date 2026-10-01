@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use calvin::db;
-use calvin::ingest::{Quiet, ingest_claude_code, ingest_copilot_cli};
+use calvin::ingest::{Quiet, ingest_claude_code, ingest_copilot_cli, ingest_cursor};
 use calvin::insights::{self, CostBy, Since};
 use calvin::prices::PriceTable;
 use calvin::timeline;
@@ -45,6 +45,153 @@ fn ingest(conn: &mut Connection, claude: &Path) -> calvin::ingest::Stats {
 
 fn count(conn: &Connection, sql: &str) -> i64 {
     conn.query_row(sql, [], |r| r.get(0)).unwrap()
+}
+
+#[test]
+fn imports_cursor_sqlite_sessions_and_timeline() {
+    let tmp = tempfile::tempdir().unwrap();
+    let user_dir = tmp.path().join("Cursor/User");
+    let global = user_dir.join("globalStorage");
+    fs::create_dir_all(&global).unwrap();
+    let state_db = global.join("state.vscdb");
+    let source = Connection::open(&state_db).unwrap();
+    source
+        .execute_batch(
+            "CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB);
+             CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value BLOB);",
+        )
+        .unwrap();
+    let composer = serde_json::json!({
+        "composerId": "thread-1",
+        "name": "Implement Cursor telemetry",
+        "createdAt": 1_700_000_000_000_i64,
+        "lastUpdatedAt": 1_700_000_005_000_i64,
+        "unifiedMode": "agent",
+        "workspaceIdentifier": "workspace-a",
+        "fullConversationHeadersOnly": ["user-1", "tool-1", "answer-1"]
+    });
+    let headers = serde_json::json!([{
+        "composerId": "thread-1",
+        "lastUpdatedAt": 1_700_000_005_000_i64,
+        "workspaceIdentifier": "workspace-a"
+    }]);
+    let bubbles = [
+        (
+            "user-1",
+            serde_json::json!({
+                "bubbleId": "user-1", "type": 1, "createdAt": "2023-11-14T22:13:20Z",
+                "requestId": "request-1", "text": "Update src/main.rs",
+                "modelInfo": {"modelName": "claude-4.5-sonnet-thinking"},
+                "tokenCount": {"inputTokens": 120, "outputTokens": 15}
+            }),
+        ),
+        (
+            "tool-1",
+            serde_json::json!({
+                "bubbleId": "tool-1", "type": 2, "createdAt": "2023-11-14T22:13:21Z",
+                "capabilityType": 15,
+                "toolFormerData": {
+                    "toolCallId": "call-1", "name": "search_replace", "status": "completed",
+                    "params": {"relativeWorkspacePath": "src/main.rs"}, "result": "done"
+                }
+            }),
+        ),
+        (
+            "answer-1",
+            serde_json::json!({
+                "bubbleId": "answer-1", "type": 2, "createdAt": "2023-11-14T22:13:22Z",
+                "text": "Updated the file."
+            }),
+        ),
+    ];
+    source
+        .execute(
+            "INSERT INTO ItemTable (key, value) VALUES ('composer.composerHeaders', ?1)",
+            [serde_json::to_vec(&headers).unwrap()],
+        )
+        .unwrap();
+    source
+        .execute(
+            "INSERT INTO cursorDiskKV (key, value) VALUES ('composerData:thread-1', ?1)",
+            [serde_json::to_vec(&composer).unwrap()],
+        )
+        .unwrap();
+    for (id, bubble) in bubbles {
+        source
+            .execute(
+                "INSERT INTO cursorDiskKV (key, value) VALUES (?1, ?2)",
+                rusqlite::params![
+                    format!("bubbleId:thread-1:{id}"),
+                    serde_json::to_vec(&bubble).unwrap()
+                ],
+            )
+            .unwrap();
+    }
+    drop(source);
+
+    let workspace = user_dir.join("workspaceStorage/workspace-a");
+    fs::create_dir_all(&workspace).unwrap();
+    fs::write(
+        workspace.join("workspace.json"),
+        r#"{"folder":"file:///C%3A/work/calvin"}"#,
+    )
+    .unwrap();
+
+    let mut conn = db::open_in_memory().unwrap();
+    let stats = ingest_cursor(&mut conn, &state_db, &PriceTable::bundled(), &mut Quiet).unwrap();
+    assert_eq!(stats.files_read, 1);
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM sessions"), 1);
+    assert_eq!(
+        conn.query_row(
+            "SELECT harness FROM sessions WHERE id = 'cursor:thread-1'",
+            [],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        "cursor"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT cwd FROM sessions WHERE id = 'cursor:thread-1'",
+            [],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        r"C:\work\calvin"
+    );
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM prompts"), 1);
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM assistant_messages"), 1);
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM requests"), 1);
+    assert_eq!(
+        conn.query_row(
+            "SELECT input_tokens FROM requests WHERE request_id = 'cursor:request-1'",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        120
+    );
+    assert_eq!(
+        count(
+            &conn,
+            "SELECT COUNT(*) FROM tool_calls WHERE outcome = 'ok'"
+        ),
+        1
+    );
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM session_files"), 1);
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM session_modes"), 1);
+
+    let session = timeline::session(&conn, "cursor:thread-1")
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.turns.len(), 1);
+    assert_eq!(session.turns[0].tool_calls, 1);
+    assert_eq!(session.turns[0].items.len(), 2);
+
+    let unchanged =
+        ingest_cursor(&mut conn, &state_db, &PriceTable::bundled(), &mut Quiet).unwrap();
+    assert_eq!(unchanged.files_read, 0);
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM requests"), 1);
 }
 
 fn copilot_fixture() -> (tempfile::TempDir, PathBuf) {

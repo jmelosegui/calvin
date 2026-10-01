@@ -170,6 +170,8 @@ pub fn run_foreground(cfg: &Config) -> Result<()> {
                 db_path,
                 cfg.claude_dir()?,
                 cfg.copilot_dir()?,
+                cfg.cursor_dir()?,
+                cfg.cursor_state_db()?,
                 cfg.skill_folders(),
                 cfg.price_table(),
                 token.clone(),

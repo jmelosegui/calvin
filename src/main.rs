@@ -133,6 +133,7 @@ fn main() -> Result<()> {
                 &mut conn,
                 &cfg.claude_dir()?,
                 &cfg.copilot_dir()?,
+                &cfg.cursor_state_db()?,
                 &prices,
                 &mut Bar::default(),
             )?;
@@ -156,6 +157,7 @@ fn main() -> Result<()> {
                 &mut conn,
                 &cfg.claude_dir()?,
                 &cfg.copilot_dir()?,
+                &cfg.cursor_state_db()?,
                 &prices,
                 &mut Bar::default(),
             )?;
@@ -188,6 +190,7 @@ fn main() -> Result<()> {
                 &mut conn,
                 &cfg.claude_dir()?,
                 &cfg.copilot_dir()?,
+                &cfg.cursor_state_db()?,
                 &prices,
                 &mut Bar::default(),
             )?;

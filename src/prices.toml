@@ -52,3 +52,16 @@ output = 15.0
 [models."claude-haiku-4-5"]
 input = 1.0
 output = 5.0
+
+# Cursor's model identifiers for Anthropic models.
+[models."claude-4.5-opus-high-thinking"]
+input = 5.0
+output = 25.0
+
+[models."claude-4.5-sonnet-thinking"]
+input = 3.0
+output = 15.0
+
+[models."claude-4-sonnet"]
+input = 3.0
+output = 15.0

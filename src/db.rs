@@ -13,7 +13,8 @@ const SCHEMA: &str = include_str!("schema.sql");
 /// - 4: `requests.effort`, backfilled from the raw lines.
 /// - 5: Copilot CLI usage fields (`ai_units`, `duration_ms`).
 /// - 6: Copilot turn linkage, session modes and tool result telemetry.
-pub const SCHEMA_VERSION: i64 = 6;
+/// - 7: provider-neutral assistant messages for normalized Cursor timelines.
+pub const SCHEMA_VERSION: i64 = 7;
 
 /// Lines per compressed block when migrating old rows.
 const MIGRATION_CHUNK_BYTES: usize = 4 * 1024 * 1024;
