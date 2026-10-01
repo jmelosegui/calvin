@@ -162,13 +162,15 @@
         return;
       }
       const name = (id) => id === "claude-code" ? "Claude Code" : id === "copilot-cli" ? "Copilot CLI" : id;
-      const colors = ["#ff641f", "#6ca8ff", "#8bd450", "#d783ff", "#ffd166", "#4dd9c0"];
+      const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      const fallback = ["#8bd450", "#d783ff", "#ffd166", "#4dd9c0"];
+      const color = (id, index) => id === "claude-code" ? css("--claude") : id === "copilot-cli" ? css("--copilot") : fallback[index % fallback.length];
       const totalSessions = rows.reduce((n, r) => n + r.sessions, 0);
       let cursor = 0;
       const stops = rows.map((r, i) => {
         const start = cursor;
         cursor += totalSessions ? (r.sessions / totalSessions) * 100 : 0;
-        return `${colors[i % colors.length]} ${start}% ${cursor}%`;
+        return `${color(r.harness, i)} ${start}% ${cursor}%`;
       }).join(", ");
       const metrics = [
         ["Prompts / session", (r) => r.sessions ? (r.prompts + r.commands) / r.sessions : 0, (v) => v.toFixed(1)],
@@ -181,7 +183,7 @@
         return `<div class="compare-metric"><div class="compare-label">${label}</div>${rows.map((r, i) => `
           <div class="compare-row">
             <span>${esc(name(r.harness))}</span>
-            <div class="compare-track"><i style="width:${(values[i] / max) * 100}%;background:${colors[i % colors.length]}"></i></div>
+            <div class="compare-track"><i style="width:${(values[i] / max) * 100}%;background:${color(r.harness, i)}"></i></div>
             <b>${format(values[i])}</b>
           </div>`).join("")}</div>`;
       }).join("");
@@ -190,7 +192,7 @@
         const billing = r.harness === "claude-code"
           ? `${money(r.cost_usd ?? 0)} estimated cost`
           : r.ai_units == null ? "billing unavailable" : `${r.ai_units.toFixed(2)} AI units`;
-        return `<div class="mix-legend"><i style="background:${colors[i % colors.length]}"></i><span><b>${esc(name(r.harness))}</b><small>${num(r.sessions)} sessions · ${share}% · ${esc(billing)}</small></span></div>`;
+        return `<div class="mix-legend"><i style="background:${color(r.harness, i)}"></i><span><b>${esc(name(r.harness))}</b><small>${num(r.sessions)} sessions · ${share}% · ${esc(billing)}</small></span></div>`;
       }).join("");
       $("#comparison").innerHTML = `<div class="compare-grid">
         <div class="mix">
@@ -441,13 +443,13 @@
               const right = a.kind === "request" && a.tokens != null ? `${tok(a.tokens)} out` : "";
               const where = a.project ? `in ${esc(a.project)}` : "";
               const provider = LIVE_HARNESS[a.harness] ?? a.harness;
-              return `<li class="${isNew ? "new" : ""}" title="${where}"><span class="t">${t}</span><span class="l"><span class="k">${esc(provider)}</span> <span class="k">${LIVE_LABEL[a.kind] ?? esc(a.kind)}</span> ${esc(a.label)}</span><span class="ms">${right}</span></li>`;
+              return `<li class="${isNew ? "new" : ""}" title="${where}"><span class="t">${t}</span><span class="l"><span class="provider-badge ${esc(a.harness)}">${esc(provider)}</span> <span class="k">${LIVE_LABEL[a.kind] ?? esc(a.kind)}</span> ${esc(a.label)}</span><span class="ms">${right}</span></li>`;
             }).join("")
           : `<li><span class="empty">No activity yet.</span></li>`;
         const sync = status.last_sync;
         const synced = sync ? new Date(sync.at).toLocaleTimeString() : "not yet";
         const syncErr = sync?.error ? ` · <span class="error">sync error: ${esc(sync.error)}</span>` : "";
-        $("#footer").innerHTML = `calvin ${esc(status.version)} · data from your local Claude Code logs, kept on this machine · last synced ${synced}${syncErr}`;
+        $("#footer").innerHTML = `calvin ${esc(status.version)} · data from your local Claude Code and Copilot CLI logs, kept on this machine · last synced ${synced}${syncErr}`;
         renderUpdate(status.update);
         if (sync && sync.lines > 0 && !first) load();
       } catch (e) {
@@ -489,12 +491,16 @@
       const r = document.documentElement;
       r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
       localStorage.setItem("calvin-theme", r.dataset.theme);
+      load();
     };
     const fullscreen = () => (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen());
 
     document.documentElement.dataset.theme = localStorage.getItem("calvin-theme") ?? "dark";
     document.querySelectorAll("#range button").forEach((b) => b.addEventListener("click", () => setRange(+b.dataset.days)));
-    $("#harness").onchange = load;
+    $("#harness").onchange = () => {
+      $("#harness").closest(".cli-picker").dataset.cli = selectedHarness();
+      load();
+    };
     $("#pause").addEventListener("click", togglePause);
     $("#theme").addEventListener("click", toggleTheme);
     $("#fs").addEventListener("click", fullscreen);

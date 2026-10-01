@@ -37,7 +37,8 @@
       display: inline-block; margin-left: 7px; padding: 1px 6px; border: 1px solid var(--line-dim);
       border-radius: 5px; color: var(--muted); font-size: 10px; font-weight: 600; vertical-align: 1px;
     }
-    .provider.copilot-cli { border-color: var(--orange); color: var(--orange-ink); }
+    .provider.claude-code { border-color: var(--claude); color: var(--claude-ink); }
+    .provider.copilot-cli { border-color: var(--copilot); color: var(--copilot-ink); }
     .sessions .first { margin-top: 2px; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis;
       display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
     .sessions .proj { color: var(--muted); font-size: 13px; white-space: nowrap; }
@@ -218,7 +219,12 @@
       $("#q").oninput = renderList;
       $("#project").onchange = renderList;
       $("#harness").value = harness;
-      $("#harness").onchange = () => { harness = $("#harness").value; renderList(); };
+      $("#harness").closest(".cli-picker").dataset.cli = harness;
+      $("#harness").onchange = () => {
+        harness = $("#harness").value;
+        $("#harness").closest(".cli-picker").dataset.cli = harness;
+        renderList();
+      };
       $("#onlyfriction").onchange = renderList;
       api(`/api/sessions?since=${range}`).then((rows) => {
         sessions = rows;

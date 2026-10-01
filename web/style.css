@@ -13,6 +13,10 @@
   --faint: #6b655e;
   --orange: #ff6a1a;
   --orange-ink: #ff7f36;
+  --claude: #ff641f;
+  --claude-ink: #ff8a4d;
+  --copilot: #6ca8ff;
+  --copilot-ink: #8fbdff;
   --dot: rgba(255, 255, 255, 0.05);
   --btn: #221f1c;
 }
@@ -27,6 +31,10 @@
   --faint: #a39b91;
   --orange: #e85a0c;
   --orange-ink: #b84604;
+  --claude: #e85a0c;
+  --claude-ink: #b84604;
+  --copilot: #397fdc;
+  --copilot-ink: #155ebd;
   --dot: rgba(0, 0, 0, 0.07);
   --btn: #ece6de;
 }
@@ -78,6 +86,14 @@ h1 .px { font-family: "Silkscreen", monospace; font-weight: 400; font-size: 36px
   background: var(--bg); color: var(--text); font: 500 13px "Outfit", sans-serif;
 }
 .cli-picker select:focus { outline: none; border-color: var(--orange); }
+.cli-picker[data-cli="claude-code"] select, .provider-picker[data-cli="claude-code"] select { border-color: var(--claude); color: var(--claude-ink); }
+.cli-picker[data-cli="copilot-cli"] select, .provider-picker[data-cli="copilot-cli"] select { border-color: var(--copilot); color: var(--copilot-ink); }
+.provider-badge {
+  display: inline-block; padding: 1px 6px; border: 1px solid var(--line-dim); border-radius: 5px;
+  color: var(--muted); font-size: 10px; font-weight: 600; vertical-align: 1px; white-space: nowrap;
+}
+.provider-badge.claude-code { border-color: var(--claude); color: var(--claude-ink); }
+.provider-badge.copilot-cli { border-color: var(--copilot); color: var(--copilot-ink); }
 .btn {
   display: inline-flex; align-items: center; gap: 10px; padding: 10px 16px; border: 0; border-radius: 8px;
   background: var(--btn); color: var(--text); font: 600 14px "Outfit", sans-serif; cursor: pointer;

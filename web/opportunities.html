@@ -66,7 +66,7 @@
     .opps td.num { text-align: right; white-space: nowrap; font-family: "JetBrains Mono", monospace; font-size: 13px; color: var(--orange-ink); }
     .opps .area-c { color: var(--muted); white-space: nowrap; }
     .opps .title-c { font-weight: 600; min-width: 220px; }
-    .cli-mark { display: inline-block; margin-right: 7px; padding: 1px 6px; border: 1px solid var(--line-dim); border-radius: 5px; color: var(--muted); font-size: 10px; font-weight: 600; vertical-align: 1px; }
+    .cli-mark { margin-right: 7px; }
     .opps .find-c { color: var(--muted); max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .opps tr.good .title-c { font-weight: 500; color: var(--muted); }
     .st { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; white-space: nowrap; border: 1.5px solid var(--line-dim); color: var(--muted); }
@@ -177,7 +177,7 @@
           <h2>Turn these opportunities into an action plan</h2>
           <p class="sub"><b>The checklist below is complete without this step.</b> Use the advisor when you want the AI tool you choose to prioritize Calvin's findings, connect patterns, and draft ready-to-use changes. Nothing is sent until you press the button.</p>
         </div>
-        <label class="prov" title="This chooses which installed AI writes the optional plan; it does not filter the recommendations.">Plan writer <select id="provider"></select></label>
+        <label class="prov provider-picker" title="This chooses which installed AI writes the optional plan; it does not filter the recommendations.">Plan writer <select id="provider"></select></label>
       </div>
       <div class="custom" id="custom">
         <input class="field" id="cname" placeholder="Name, e.g. Codex" />
@@ -311,7 +311,7 @@
               <tr data-i="${i}" class="${o.status}">
                 <td><span class="st ${o.status}">${STATUS[o.status]}</span></td>
                 <td class="area-c">${esc(o.area)}</td>
-                <td class="title-c"><span class="cli-mark">${esc(SCOPE[scopeOf(o)])}</span>${esc(o.title)}</td>
+                <td class="title-c"><span class="cli-mark provider-badge ${esc(scopeOf(o))}">${esc(SCOPE[scopeOf(o)])}</span>${esc(o.title)}</td>
                 <td class="find-c" title="${esc(o.finding)}">${esc(o.finding)}</td>
                 <td class="num">${o.saving_usd ? `~${money(o.saving_usd)}` : ""}</td>
                 <td>${spark(o)}</td>
@@ -332,6 +332,7 @@
 
     $("#scope").onchange = (event) => {
       selectedScope = event.target.value;
+      event.target.closest(".cli-picker").dataset.cli = selectedScope;
       selectedArea = "";
       render();
     };
@@ -394,6 +395,7 @@
     function updateAdvisorUi() {
       const p = current();
       const isCustom = p?.id === "command";
+      $("#provider").closest(".provider-picker").dataset.cli = p?.id ?? "";
       $("#custom").classList.toggle("show", isCustom && !p.available);
       $("#ask").textContent = `Ask ${p ? p.name : "the advisor"} to prioritize these opportunities`;
       $("#ask").disabled = !p || !p.available || polling !== null;

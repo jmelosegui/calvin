@@ -146,7 +146,9 @@
 
     const KIND = { global: "global", project: "project", plugin: "plugin" };
     const PROVIDER = { "claude-code": "Claude Code", "copilot-cli": "Copilot CLI" };
-    const providerLabel = (s) => s.providers?.map((p) => PROVIDER[p] ?? p).join(" + ") || "usage only";
+    const providerBadges = (s) => s.providers?.length
+      ? s.providers.map((p) => `<span class="provider-badge ${esc(p)}">${esc(PROVIDER[p] ?? p)}</span>`).join(" ")
+      : `<span class="provider-badge">usage only</span>`;
 
     function renderList() {
       const q = $("#q").value.trim().toLowerCase();
@@ -161,7 +163,7 @@
               const n = s.model_runs + s.command_runs;
               return `<div class="row ${s.name === current ? "current" : ""}" data-name="${esc(s.name)}">
                 <input type="checkbox" ${selected.has(s.name) ? "checked" : ""} aria-label="Select ${esc(s.name)}" />
-                <div><div class="nm">${esc(s.name)}<small>${KIND[s.kind] ?? esc(s.kind)} · ${esc(providerLabel(s))}</small></div><div class="desc">${esc(s.description)}</div></div>
+                <div><div class="nm">${esc(s.name)}<small>${KIND[s.kind] ?? esc(s.kind)} · ${providerBadges(s)}</small></div><div class="desc">${esc(s.description)}</div></div>
                 <span class="uses ${n ? "" : "zero"}" title="model ran it ${s.model_runs}× · you ran it ${s.command_runs}×">${n}</span>
                 <span class="last">${day(s.last_used)}</span>
               </div>`;
@@ -195,7 +197,7 @@
           : "";
         box.innerHTML = `
           <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-            <h2 style="margin:0">${esc(d.skill.name)}</h2><span class="badge">${KIND[d.skill.kind] ?? esc(d.skill.kind)}</span><span class="badge">${esc(providerLabel(d.skill))}</span>
+            <h2 style="margin:0">${esc(d.skill.name)}</h2><span class="badge">${KIND[d.skill.kind] ?? esc(d.skill.kind)}</span>${providerBadges(d.skill)}
             <button class="btn" id="openfolder" style="margin-left:auto" title="Open in your file manager">Open folder</button>
             <button class="btn primary" id="packone">Pack this skill</button>
           </div>
@@ -308,6 +310,7 @@
       }));
     $("#provider-filter").onchange = (event) => {
       provider = event.target.value;
+      event.target.closest(".cli-picker").dataset.cli = provider;
       renderList();
     };
     $("#pack").onclick = () => pack([...selected]);
