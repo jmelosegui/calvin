@@ -48,6 +48,29 @@ fn count(conn: &Connection, sql: &str) -> i64 {
 }
 
 #[test]
+fn resumed_sessions_are_recent_activity() {
+    let conn = db::open_in_memory().unwrap();
+    conn.execute_batch(
+        "INSERT INTO sessions (id, harness, started_at, ended_at)
+         VALUES ('cursor:resumed', 'cursor',
+                 '2026-05-01T10:00:00Z', '2026-10-01T10:00:00Z');
+         INSERT INTO prompts (id, session_id, ts, kind, text, is_sidechain)
+         VALUES ('cursor:resumed:turn:0', 'cursor:resumed',
+                 '2026-10-01T10:00:00Z', 'prompt', 'Continue the work', 0);",
+    )
+    .unwrap();
+    let since = Since("2026-09-01T00:00:00Z".into());
+    let sessions = insights::sessions(&conn, &since, 10).unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].id, "cursor:resumed");
+    assert_eq!(insights::summary(&conn, &since).unwrap().sessions, 1);
+    assert_eq!(
+        insights::harness_comparison(&conn, &since).unwrap()[0].sessions,
+        1
+    );
+}
+
+#[test]
 fn imports_cursor_sqlite_sessions_and_timeline() {
     let tmp = tempfile::tempdir().unwrap();
     let user_dir = tmp.path().join("Cursor/User");

@@ -65,7 +65,7 @@ pub fn summary(conn: &Connection, since: &Since) -> Result<Summary> {
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
     let sessions: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM sessions WHERE started_at >= ?1",
+        "SELECT COUNT(*) FROM sessions WHERE COALESCE(ended_at, started_at) >= ?1",
         [&since.0],
         |r| r.get(0),
     )?;
@@ -119,13 +119,17 @@ pub struct HarnessComparison {
 /// provider-specific billing models.
 pub fn harness_comparison(conn: &Connection, since: &Since) -> Result<Vec<HarnessComparison>> {
     let harnesses: Vec<String> = conn
-        .prepare("SELECT DISTINCT harness FROM sessions WHERE started_at >= ?1 ORDER BY harness")?
+        .prepare(
+            "SELECT DISTINCT harness FROM sessions
+             WHERE COALESCE(ended_at, started_at) >= ?1 ORDER BY harness",
+        )?
         .query_map([&since.0], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
     let mut out = Vec::with_capacity(harnesses.len());
     for harness in harnesses {
         let sessions = conn.query_row(
-            "SELECT COUNT(*) FROM sessions WHERE harness = ?2 AND started_at >= ?1",
+            "SELECT COUNT(*) FROM sessions
+             WHERE harness = ?2 AND COALESCE(ended_at, started_at) >= ?1",
             params![since.0, harness],
             |r| r.get(0),
         )?;
@@ -153,7 +157,7 @@ pub fn harness_comparison(conn: &Connection, since: &Since) -> Result<Vec<Harnes
         )?;
         let files_touched = conn.query_row(
             "SELECT COUNT(*) FROM session_files sf JOIN sessions s ON s.id = sf.session_id
-             WHERE s.started_at >= ?1 AND s.harness = ?2",
+             WHERE COALESCE(s.ended_at, s.started_at) >= ?1 AND s.harness = ?2",
             params![since.0, harness],
             |r| r.get(0),
         )?;
@@ -681,7 +685,7 @@ pub struct SessionRow {
     pub friction: i64,
 }
 
-/// Sessions that started in the period, newest first.
+/// Sessions active in the period, most recently active first.
 pub fn sessions(conn: &Connection, since: &Since, limit: i64) -> Result<Vec<SessionRow>> {
     let rows = conn
         .prepare(
@@ -696,8 +700,8 @@ pub fn sessions(conn: &Connection, since: &Since, limit: i64) -> Result<Vec<Sess
                     (SELECT COUNT(*) FROM tool_calls t WHERE t.session_id = s.id),
                     (SELECT COUNT(*) FROM friction f WHERE f.session_id = s.id)
              FROM sessions s
-             WHERE s.started_at IS NOT NULL AND s.started_at >= ?1
-             ORDER BY s.started_at DESC LIMIT ?2",
+             WHERE s.started_at IS NOT NULL AND COALESCE(s.ended_at, s.started_at) >= ?1
+             ORDER BY COALESCE(s.ended_at, s.started_at) DESC LIMIT ?2",
         )?
         .query_map(params![since.0, limit], |r| {
             Ok(SessionRow {
