@@ -79,6 +79,25 @@ fn resumed_sessions_are_recent_activity() {
     assert_eq!(comparison.prompts, 1);
     assert_eq!(comparison.tool_calls, 1);
     assert_eq!(comparison.files_touched, 1);
+
+    let temp = tempfile::tempdir().unwrap();
+    let cursor_dir = temp.path().join(".cursor");
+    let state_db = temp.path().join("state.vscdb");
+    let prices = PriceTable::bundled();
+    let context = calvin::opportunities::Context {
+        claude_dir: temp.path(),
+        copilot_dir: temp.path(),
+        cursor_dir: &cursor_dir,
+        cursor_state_db: &state_db,
+        prices: &prices,
+        skills: &[],
+    };
+    let opportunities = calvin::opportunities::run(&conn, &since, &context).unwrap();
+    assert!(
+        opportunities
+            .iter()
+            .any(|opportunity| opportunity.id == "cursor-hooks")
+    );
 }
 
 #[test]

@@ -765,7 +765,7 @@ fn cursor_plan_mode(conn: &Connection, since: &Since) -> Result<Opportunity> {
                     (SELECT COUNT(*) FROM tool_calls t WHERE t.session_id = s.id),
                     (SELECT COUNT(*) FROM session_files f WHERE f.session_id = s.id)
              FROM sessions s
-             WHERE s.harness = 'cursor' AND s.started_at >= ?1
+             WHERE s.harness = 'cursor' AND COALESCE(s.ended_at, s.started_at) >= ?1
                AND ((SELECT COUNT(*) FROM tool_calls t WHERE t.session_id = s.id) >= 12
                     OR (SELECT COUNT(*) FROM session_files f WHERE f.session_id = s.id) >= 4)
                AND NOT EXISTS (
@@ -860,7 +860,7 @@ fn cursor_review(conn: &Connection, since: &Since) -> Result<Opportunity> {
     let mut statement = conn.prepare(
         "SELECT s.id, COALESCE(s.title, s.project, s.id), COUNT(sf.file_path)
              FROM sessions s JOIN session_files sf ON sf.session_id = s.id
-             WHERE s.harness = 'cursor' AND s.started_at >= ?1
+             WHERE s.harness = 'cursor' AND COALESCE(s.ended_at, s.started_at) >= ?1
              GROUP BY s.id
              HAVING COUNT(sf.file_path) >= 5
                 AND NOT EXISTS (
@@ -910,7 +910,8 @@ fn cursor_feature_catalog(
     cursor_state_db: &Path,
 ) -> Result<Vec<Opportunity>> {
     let sessions: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM sessions WHERE harness = 'cursor' AND started_at >= ?1",
+        "SELECT COUNT(*) FROM sessions
+         WHERE harness = 'cursor' AND COALESCE(ended_at, started_at) >= ?1",
         [&since.0],
         |row| row.get(0),
     )?;
@@ -1172,7 +1173,8 @@ fn cursor_roots(conn: &Connection, since: &Since) -> Result<BTreeSet<PathBuf>> {
     let mut roots = BTreeSet::new();
     let mut statement = conn.prepare(
         "SELECT DISTINCT cwd FROM sessions
-             WHERE harness = 'cursor' AND cwd IS NOT NULL AND started_at >= ?1",
+         WHERE harness = 'cursor' AND cwd IS NOT NULL
+           AND COALESCE(ended_at, started_at) >= ?1",
     )?;
     for row in statement.query_map([&since.0], |row| row.get::<_, String>(0))? {
         let path = PathBuf::from(row?);
