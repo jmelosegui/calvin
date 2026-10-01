@@ -519,7 +519,7 @@ fn run_cursor(job: &Arc<Mutex<Job>>, settings: &CursorAdvisor, prompt: &str) -> 
         find_program(&settings.program).unwrap_or_else(|| PathBuf::from(&settings.program));
     let mut cmd = Command::new(&program);
     cmd.current_dir(workdir()?)
-        .args(["-p", "--mode", "ask", "--output-format", "text"])
+        .args(["-p", "--mode", "ask", "--trust", "--output-format", "text"])
         .args(
             (!settings.model.trim().is_empty())
                 .then_some(["--model", settings.model.as_str()])
