@@ -44,6 +44,7 @@ pub struct InstalledSkill {
 pub struct Locations {
     pub claude_dir: PathBuf,
     pub copilot_dir: PathBuf,
+    pub cursor_dir: PathBuf,
     pub project_dirs: Vec<PathBuf>,
     pub extra: Vec<PathBuf>,
 }
@@ -105,6 +106,14 @@ pub fn installed(loc: &Locations) -> Vec<InstalledSkill> {
     for skill in scan(&loc.copilot_dir.join("skills"), 2, "global", "copilot-cli") {
         add(skill);
     }
+    for skill in scan(
+        &loc.cursor_dir.join("skills-cursor"),
+        2,
+        "global",
+        "cursor",
+    ) {
+        add(skill);
+    }
 
     for dir in project_roots(&loc.project_dirs) {
         let project = dir
@@ -129,11 +138,24 @@ pub fn installed(loc: &Locations) -> Vec<InstalledSkill> {
             skill.detail = Some(format!("in the {project} repository"));
             add(skill);
         }
+        for mut skill in scan(
+            &dir.join(".cursor").join("skills"),
+            2,
+            "project",
+            "cursor",
+        ) {
+            skill.detail = Some(format!("in the {project} repository"));
+            add(skill);
+        }
     }
     for dir in &loc.extra {
         for mut skill in scan(dir, 3, "global", "shared") {
             classify_global(&mut skill, &lock);
-            skill.providers = vec!["claude-code".into(), "copilot-cli".into()];
+            skill.providers = vec![
+                "claude-code".into(),
+                "copilot-cli".into(),
+                "cursor".into(),
+            ];
             add(skill);
         }
     }
@@ -409,6 +431,7 @@ mod tests {
         let loc = Locations {
             claude_dir: claude,
             copilot_dir: copilot,
+            cursor_dir: tmp.path().join("cursor"),
             project_dirs: vec![session_dir],
             extra: vec![],
         };

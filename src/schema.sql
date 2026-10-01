@@ -45,6 +45,16 @@ CREATE TABLE IF NOT EXISTS prompts (
 );
 CREATE INDEX IF NOT EXISTS prompts_ts ON prompts (ts);
 
+CREATE TABLE IF NOT EXISTS assistant_messages (
+    id         TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    request_id TEXT,
+    ts         TEXT NOT NULL,
+    text       TEXT NOT NULL,
+    turn_index INTEGER
+);
+CREATE INDEX IF NOT EXISTS assistant_messages_session ON assistant_messages (session_id);
+
 -- One row per model API request. Harnesses that split one response across several log
 -- lines are deduplicated on request_id.
 CREATE TABLE IF NOT EXISTS requests (
@@ -111,8 +121,7 @@ CREATE INDEX IF NOT EXISTS tool_calls_session ON tool_calls (session_id);
 CREATE INDEX IF NOT EXISTS friction_session ON friction (session_id);
 CREATE INDEX IF NOT EXISTS sessions_started ON sessions (started_at);
 
--- Provider-neutral session artifacts. Copilot CLI currently supplies these directly;
--- other adapters can leave them empty.
+-- Provider-neutral session artifacts supplied directly by Copilot CLI and Cursor.
 CREATE TABLE IF NOT EXISTS session_files (
     session_id    TEXT NOT NULL,
     file_path     TEXT NOT NULL,

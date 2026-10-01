@@ -12,9 +12,11 @@ pub enum Event {
         title: String,
     },
     Prompt(Prompt),
+    AssistantMessage(AssistantMessage),
     Request(Request),
     ToolCall(ToolCall),
     ToolResult(ToolResult),
+    FileTouched(FileTouched),
     Interrupted {
         id: String,
         session_id: String,
@@ -82,7 +84,18 @@ pub struct Request {
     /// Reasoning effort the request ran at (`low` … `max`), if the harness records it.
     pub effort: Option<String>,
     pub turn_index: Option<i64>,
+    pub duration_ms: Option<i64>,
     pub is_sidechain: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AssistantMessage {
+    pub id: String,
+    pub session_id: String,
+    pub request_id: Option<String>,
+    pub ts: String,
+    pub text: String,
+    pub turn_index: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -125,4 +138,13 @@ pub struct ToolResult {
     pub outcome: Outcome,
     /// First part of the result text, kept for rejected/denied results.
     pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileTouched {
+    pub session_id: String,
+    pub path: String,
+    pub tool: Option<String>,
+    pub turn_index: Option<i64>,
+    pub ts: String,
 }
