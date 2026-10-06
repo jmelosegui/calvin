@@ -53,7 +53,7 @@ Your session logs contain prompts, source code and often confidential details. c
 
 - never sends data anywhere: no telemetry, no accounts, no cloud
 - makes one network call on its own: while running, it asks GitHub once a day whether a
-  newer release exists, so it can tell you. That request carries nothing about you or your
+  newer release exists, so it can tell you (a failed check is retried after an hour). That request carries nothing about you or your
   usage. Turn it off with `[updates] check = false` in `config.toml`
 - sends your data only when you ask it to: **Ask for a plan** on the Opportunities page
   passes the report (findings, numbers, and evidence such as repeated prompts and rejected
