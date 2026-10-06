@@ -28,6 +28,7 @@ const SKILLS_HTML: &str = include_str!("../web/skills.html");
 const SESSIONS_HTML: &str = include_str!("../web/sessions.html");
 const OPPORTUNITIES_HTML: &str = include_str!("../web/opportunities.html");
 const STYLE_CSS: &str = include_str!("../web/style.css");
+const UPDATE_JS: &str = include_str!("../web/update.js");
 /// SKILL.md previews are cut off beyond this.
 const PREVIEW_BYTES: usize = 200 * 1024;
 const LOGO_SVG: &str = include_str!("../assets/logo.svg");
@@ -164,6 +165,15 @@ pub fn router(state: Arc<AppState>) -> Router {
                 (
                     [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
                     STYLE_CSS,
+                )
+            }),
+        )
+        .route(
+            "/update.js",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+                    UPDATE_JS,
                 )
             }),
         )
