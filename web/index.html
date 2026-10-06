@@ -6,6 +6,7 @@
   <title>calvin · Prime Radiant</title>
   <link rel="icon" type="image/svg+xml" href="/logo.svg" />
   <link rel="stylesheet" href="/style.css" />
+  <script src="/update.js"></script>
 </head>
 <body>
   <header class="top">
@@ -19,8 +20,6 @@
     <nav class="nav"><a href="/" class="active">Prime Radiant</a><a href="/opportunities">Opportunities</a><a href="/sessions">Sessions</a><a href="/skills">Skills</a></nav>
     <button class="icon-btn" id="theme" title="Toggle theme (T)">◐</button>
   </header>
-
-  <div class="update" id="update" role="status"></div>
 
   <div class="titlebar">
     <h1>How I work with the <span class="px">MODELS</span></h1>
@@ -543,29 +542,11 @@
         const synced = sync ? new Date(sync.at).toLocaleTimeString() : "not yet";
         const syncErr = sync?.error ? ` · <span class="error">sync error: ${esc(sync.error)}</span>` : "";
         $("#footer").innerHTML = `calvin ${esc(status.version)} · data from your local Claude Code, Copilot CLI and Cursor history, kept on this machine · last synced ${synced}${syncErr}`;
-        renderUpdate(status.update);
+        calvinUpdate.render(status.update);
         if (sync && sync.lines > 0 && !first) load();
       } catch (e) {
         $("#footer").innerHTML = `<span class="error">Lost contact with calvin. Is it still running? (${esc(e.message)})</span>`;
       }
-    }
-
-    // ---------- new version banner ----------
-    function renderUpdate(u) {
-      const box = $("#update");
-      if (!u || localStorage.getItem("calvin-dismissed-update") === u.latest) {
-        box.classList.remove("show");
-        return;
-      }
-      const cmd = navigator.platform.startsWith("Win")
-        ? "irm https://raw.githubusercontent.com/jmelosegui/calvin/main/docs/install.ps1 | iex"
-        : "curl -fsSL https://raw.githubusercontent.com/jmelosegui/calvin/main/docs/install.sh | sh";
-      box.innerHTML = `<span><b>calvin ${esc(u.latest)} is available</b> (you have ${esc(u.current)}). Update with <code>${cmd}</code> · <a href="${esc(u.url)}" target="_blank" rel="noopener">what's new</a></span><button title="Dismiss until the next version" aria-label="Dismiss">×</button>`;
-      box.querySelector("button").onclick = () => {
-        localStorage.setItem("calvin-dismissed-update", u.latest);
-        box.classList.remove("show");
-      };
-      box.classList.add("show");
     }
 
     // ---------- controls ----------
