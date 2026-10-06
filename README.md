@@ -21,7 +21,7 @@ loads them into a local SQLite database, and shows you:
 
 ![The calvin dashboard: headline numbers, spend per day, live activity, skill shelf and repeated prompts](assets/dashboard.png)
 
-> **Status:** v0.1.0 is out. The current branch supports Claude Code, GitHub Copilot CLI
+> **Status:** v0.2.0 is out. It supports Claude Code, GitHub Copilot CLI
 > and Cursor on Windows, macOS and Linux.
 
 ## The dashboard
@@ -141,8 +141,8 @@ skill folders ──────────────────┘
 | Harness | Status |
 |---|---|
 | Claude Code | supported since v0.1.0 |
-| GitHub Copilot CLI | supported from local session-state and session-store data |
-| Cursor | supported from the local global `state.vscdb` conversation store |
+| GitHub Copilot CLI | supported since v0.2.0, from local session-state and session-store data |
+| Cursor | supported since v0.2.0, from the local global `state.vscdb` conversation store |
 | Codex CLI, Gemini CLI, Aider | contributions welcome |
 
 ## Configuration
