@@ -16,6 +16,8 @@ use serde::{Deserialize, Serialize};
 
 pub const REPO: &str = "jmelosegui/calvin";
 const CHECK_EVERY: chrono::Duration = chrono::Duration::hours(24);
+/// A failed check (offline, VPN, DNS) is retried sooner, so it can't hide a release for a day.
+const RETRY_AFTER_ERROR: chrono::Duration = chrono::Duration::hours(1);
 const CACHE_FILE: &str = "update-check.json";
 
 pub fn enabled(cfg_check: bool) -> bool {
@@ -94,10 +96,20 @@ fn write_cache(data_dir: &Path, result: &CheckResult) -> Result<()> {
     Ok(())
 }
 
-/// Check GitHub if the last check is older than a day. Blocking; call from a worker thread.
+fn is_due(cached: &CheckResult, now: DateTime<Utc>) -> bool {
+    let wait = if cached.error.is_some() {
+        RETRY_AFTER_ERROR
+    } else {
+        CHECK_EVERY
+    };
+    now - cached.checked_at >= wait
+}
+
+/// Check GitHub if the last check is older than a day (an hour if it failed).
+/// Blocking; call from a worker thread.
 pub fn check_if_due(data_dir: &Path) -> Result<CheckResult> {
     if let Some(cached) = read_cache(data_dir)
-        && Utc::now() - cached.checked_at < CHECK_EVERY
+        && !is_due(&cached, Utc::now())
     {
         return Ok(cached);
     }
@@ -157,6 +169,37 @@ mod tests {
         assert!(!is_newer("nightly", "0.1.0"));
         // A pre-release of the current version is older than the release.
         assert!(!is_newer("v0.2.0-rc.1", "0.2.0"));
+    }
+
+    #[test]
+    fn failed_checks_retry_sooner() {
+        let now = Utc::now();
+        let ok = CheckResult {
+            checked_at: now - chrono::Duration::hours(2),
+            latest: Some("v0.1.0".into()),
+            url: None,
+            error: None,
+        };
+        assert!(!is_due(&ok, now));
+        assert!(is_due(
+            &CheckResult {
+                checked_at: now - chrono::Duration::hours(25),
+                ..ok.clone()
+            },
+            now
+        ));
+        let failed = CheckResult {
+            error: Some("no such host".into()),
+            ..ok.clone()
+        };
+        assert!(is_due(&failed, now));
+        assert!(!is_due(
+            &CheckResult {
+                checked_at: now - chrono::Duration::minutes(30),
+                ..failed
+            },
+            now
+        ));
     }
 
     #[test]
