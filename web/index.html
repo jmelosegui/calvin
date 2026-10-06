@@ -6,6 +6,7 @@
   <title>calvin · Prime Radiant</title>
   <link rel="icon" type="image/svg+xml" href="/logo.svg" />
   <link rel="stylesheet" href="/style.css" />
+  <script src="/loading.js"></script>
   <script src="/update.js"></script>
 </head>
 <body>
@@ -121,8 +122,9 @@
     const fmtDate = (d) => d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
     const localDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
-    async function api(path) {
-      const r = await fetch(path);
+    // `label` names the request in the loading indicator; pass false for quiet background polls.
+    async function api(path, label) {
+      const r = await (label === false ? fetch(path) : calvinLoading.fetch(path, undefined, label));
       if (!r.ok) throw new Error(`${path}: ${r.status} ${(await r.json().catch(() => ({}))).error ?? ""}`);
       return r.json();
     }
@@ -474,57 +476,75 @@
     }
 
     // ---------- load a range ----------
-    async function load() {
+    // Each panel spins until its own data arrives, so one slow query only holds up its panel.
+    // A newer load (range, CLI or theme change) makes older responses stale; they are dropped.
+    // Refreshes after a background sync are quiet and skipped while a load is still running.
+    let loadSeq = 0;
+    let loading = false;
+    async function load(opts) {
+      const quiet = opts?.quiet === true;
+      if (quiet && loading) return;
+      const seq = ++loadSeq;
+      loading = true;
       const harness = selectedHarness();
       const since = `since=${range}d${harness ? `&harness=${encodeURIComponent(harness)}` : ""}`;
+      const get = (path, label) => api(path, quiet ? false : label);
+      const busy = (sel, on) => $(sel).closest(".panel").classList.toggle("is-loading", on);
+      const step = (request, sels, render) => {
+        if (!quiet) sels.forEach((s) => busy(s, true));
+        return request
+          .then((data) => { if (seq === loadSeq) render(data); })
+          .finally(() => { if (seq === loadSeq) sels.forEach((s) => busy(s, false)); });
+      };
       const costRequest = harness
-        ? api(`/api/cost?by=day&${since}`).then((rows) => ({ [harness]: rows }))
+        ? get(`/api/cost?by=day&${since}`, "billing").then((rows) => ({ [harness]: rows }))
         : Promise.all(["claude-code", "copilot-cli", "cursor"].map(async (provider) => [
             provider,
-            await api(`/api/cost?by=day&since=${range}d&harness=${provider}`),
+            await get(`/api/cost?by=day&since=${range}d&harness=${provider}`, `${{ "claude-code": "Claude Code", "copilot-cli": "Copilot CLI", cursor: "Cursor" }[provider]} billing`),
           ])).then(Object.fromEntries);
+      const skills = get(`/api/skills?${since}`, "skills");
       try {
-        const [summary, comparison, costSeries, skills, prompts, projects, friction, models] = await Promise.all([
-          api(`/api/summary?${since}`),
-          api(`/api/comparison?${since}`),
-          costRequest,
-          api(`/api/skills?${since}`),
-          api(`/api/prompts?min=3&limit=6&${since}`),
-          api(`/api/cost?by=project&${since}`),
-          api(`/api/friction?${since}`),
-          api(`/api/models?${since}`),
+        await Promise.all([
+          step(Promise.all([get(`/api/summary?${since}`, "summary"), skills]), ["#kpis"], ([summary, s]) => renderKpis(summary, s)),
+          step(get(`/api/comparison?${since}`, "CLI comparison"), ["#comparison"], renderComparison),
+          step(costRequest, ["#costChart"], renderCost),
+          step(skills, ["#shelf"], renderShelf),
+          step(get(`/api/prompts?min=3&limit=6&${since}`, "prompts"), ["#bubbles"], renderPrompts),
+          step(get(`/api/cost?by=project&${since}`, "projects"), ["#projects"], (projects) => {
+            const projectValue = (r) => r.cost_usd + aiCreditUsd(r.ai_units ?? 0);
+            $("#projectTitle").textContent = harness === "copilot-cli" ? "Copilot value by project"
+              : harness === "cursor" ? "Cursor API estimate by project"
+              : "Billing value by project";
+            $("#projectNote").textContent = harness === "copilot-cli"
+              ? "Approximate USD overage value at 1 AI credit = $0.01."
+              : harness === "cursor"
+                ? "Recorded Cursor tokens at API list price, not subscription cost."
+                : "Claude and Cursor API estimates plus Copilot's approximate USD overage value.";
+            hbars("#projects", projects.slice(0, 6).map((r) => [r.key, projectValue(r)]), harness === "claude-code" ? money : (v) => `~${money(v)}`, "No billing usage in this period.");
+          }),
+          step(get(`/api/friction?${since}`, "friction"), ["#friction"], renderFriction),
+          step(get(`/api/models?${since}`, "models"), ["#models"], renderModels),
         ]);
-        renderKpis(summary, skills);
-        renderComparison(comparison);
-        renderCost(costSeries);
-        renderShelf(skills);
-        renderPrompts(prompts);
-        const projectValue = (r) => r.cost_usd + aiCreditUsd(r.ai_units ?? 0);
-        $("#projectTitle").textContent = harness === "copilot-cli" ? "Copilot value by project"
-          : harness === "cursor" ? "Cursor API estimate by project"
-          : "Billing value by project";
-        $("#projectNote").textContent = harness === "copilot-cli"
-          ? "Approximate USD overage value at 1 AI credit = $0.01."
-          : harness === "cursor"
-            ? "Recorded Cursor tokens at API list price, not subscription cost."
-            : "Claude and Cursor API estimates plus Copilot's approximate USD overage value.";
-        hbars("#projects", projects.slice(0, 6).map((r) => [r.key, projectValue(r)]), harness === "claude-code" ? money : (v) => `~${money(v)}`, "No billing usage in this period.");
-        renderFriction(friction);
-        renderModels(models);
       } catch (e) {
-        $("#footer").innerHTML = `<span class="error">${esc(e.message)}</span>`;
+        if (seq === loadSeq) $("#footer").innerHTML = `<span class="error">${esc(e.message)}</span>`;
+      } finally {
+        if (seq === loadSeq) loading = false;
       }
     }
 
     // ---------- live feed ----------
     let paused = false;
     let seen = new Set();
+    let liveLoaded = false;
     const LIVE_LABEL = { prompt: "prompt", command: "command", tool: "tool", skill: "skill", request: "model", rejected: "rejected", denied: "denied", interrupted: "interrupted" };
     const LIVE_HARNESS = { "claude-code": "CC", "copilot-cli": "CP", cursor: "CU" };
     async function tick() {
       if (paused) return;
       try {
-        const [items, status] = await Promise.all([api("/api/live?limit=10"), api("/api/status")]);
+        // Only the first fetch shows the loading indicator; the 3-second polls stay quiet.
+        const label = liveLoaded ? false : "live feed";
+        const [items, status] = await Promise.all([api("/api/live?limit=10", label), api("/api/status", label)]);
+        liveLoaded = true;
         const first = seen.size === 0;
         $("#feed").innerHTML = items.length
           ? items.map((a) => {
@@ -543,7 +563,7 @@
         const syncErr = sync?.error ? ` · <span class="error">sync error: ${esc(sync.error)}</span>` : "";
         $("#footer").innerHTML = `calvin ${esc(status.version)} · data from your local Claude Code, Copilot CLI and Cursor history, kept on this machine · last synced ${synced}${syncErr}`;
         calvinUpdate.render(status.update);
-        if (sync && sync.lines > 0 && !first) load();
+        if (sync && sync.lines > 0 && !first) load({ quiet: true });
       } catch (e) {
         $("#footer").innerHTML = `<span class="error">Lost contact with calvin. Is it still running? (${esc(e.message)})</span>`;
       }

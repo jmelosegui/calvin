@@ -6,6 +6,7 @@
   <title>calvin · Opportunities</title>
   <link rel="icon" type="image/svg+xml" href="/logo.svg" />
   <link rel="stylesheet" href="/style.css" />
+  <script src="/loading.js"></script>
   <script src="/update.js"></script>
   <style>
     .summary { display: flex; flex-wrap: wrap; gap: 36px; }
@@ -108,8 +109,6 @@
     .progress { display: none; margin-top: 16px; padding: 12px 14px; border: 1px dashed var(--line-dim); border-radius: 10px; }
     .progress.show { display: block; }
     .progress .now { display: flex; align-items: center; gap: 10px; font-weight: 600; }
-    .spinner { width: 14px; height: 14px; border: 2px solid var(--line-dim); border-top-color: var(--orange); border-radius: 50%; animation: spin 0.8s linear infinite; }
-    @keyframes spin { to { transform: rotate(360deg); } }
     .progress ol { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font: 500 12px "JetBrains Mono", monospace; }
     .plan { margin-top: 16px; font-size: 14.5px; line-height: 1.6; }
     .plan:empty { display: none; }
@@ -202,7 +201,7 @@
     </section>
   </main>
 
-  <main id="main"><section class="panel"><div class="empty">Checking your setup…</div></section></main>
+  <main id="main"><section class="panel"><div class="empty loading-msg"><span class="spinner"></span>Checking your setup…</div></section></main>
 
   <footer>Checked against your local Claude Code, Copilot CLI and Cursor data, settings and projects. Nothing is changed for you.</footer>
 
@@ -341,16 +340,22 @@
       render();
     };
 
+    let loadSeq = 0;
     async function load() {
-      $("#main").innerHTML = `<section class="panel"><div class="empty">Checking your setup…</div></section>`;
+      const seq = ++loadSeq;
+      $("#main").innerHTML = `<section class="panel"><div class="empty loading-msg"><span class="spinner"></span>Checking your setup…</div></section>`;
       try {
-        const r = await fetch(`/api/opportunities?since=${range}`);
+        const r = await calvinLoading.fetch(`/api/opportunities?since=${range}`, undefined, "opportunities");
         if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? r.status);
-        items = await r.json();
-        trends = await fetch("/api/opportunities/trends").then((x) => (x.ok ? x.json() : {})).catch(() => ({}));
+        const found = await r.json();
+        const history = await calvinLoading.fetch("/api/opportunities/trends", undefined, "trends").then((x) => (x.ok ? x.json() : {})).catch(() => ({}));
+        // A newer range was picked while this one was loading.
+        if (seq !== loadSeq) return;
+        items = found;
+        trends = history;
         render();
       } catch (e) {
-        $("#main").innerHTML = `<section class="panel"><div class="empty error">${esc(e.message)}</div></section>`;
+        if (seq === loadSeq) $("#main").innerHTML = `<section class="panel"><div class="empty error">${esc(e.message)}</div></section>`;
       }
     }
 
@@ -385,7 +390,7 @@
     const current = () => providers.find((p) => p.selected);
 
     async function initAdvisor() {
-      providers = await fetch("/api/advisor/providers").then((r) => r.json());
+      providers = await calvinLoading.fetch("/api/advisor/providers", undefined, "plan writers").then((r) => r.json());
       const sel = $("#provider");
       sel.innerHTML = providers.map((p) => {
         const unavailable = p.id === "command" ? "not configured" : "not installed";
@@ -434,7 +439,7 @@
     }
 
     async function saveProvider(body) {
-      const r = await fetch("/api/advisor/provider", { method: "POST", headers: { "content-type": "application/json", "x-calvin-action": "1" }, body: JSON.stringify(body) });
+      const r = await calvinLoading.fetch("/api/advisor/provider", { method: "POST", headers: { "content-type": "application/json", "x-calvin-action": "1" }, body: JSON.stringify(body) }, "plan writer");
       if (!r.ok) { $("#advnote").textContent = (await r.json().catch(() => ({}))).error ?? "Could not save."; return; }
       await initAdvisor();
     }
@@ -482,7 +487,7 @@
     };
 
     async function promptText() {
-      const p = await fetch(`/api/advisor/preview?since=${range}`).then((r) => r.json());
+      const p = await calvinLoading.fetch(`/api/advisor/preview?since=${range}`, undefined, "advisor prompt").then((r) => r.json());
       if (p.error) throw new Error(p.error);
       return `${p.system}\n\n---\n\n${p.prompt}`;
     }
@@ -513,7 +518,7 @@
     };
 
     async function loadPast() {
-      const rows = await fetch("/api/advisor/reports").then((r) => r.json()).catch(() => []);
+      const rows = await calvinLoading.fetch("/api/advisor/reports", undefined, "earlier plans").then((r) => r.json()).catch(() => []);
       $("#past").innerHTML = rows.length
         ? `<h4>Earlier plans</h4>${rows.map((r) => `<button data-id="${r.id}">${esc(new Date(r.created_at).toLocaleString())}<span>${esc(r.model ?? "")} · last ${esc(r.since)}${r.cost_usd != null ? ` · $${r.cost_usd.toFixed(3)}` : ""}${r.status !== "done" ? " · failed" : ""}</span></button>`).join("")}`
         : "";
@@ -523,7 +528,7 @@
         document.querySelectorAll("#past .pastplan").forEach((p) => p.remove());
         document.querySelectorAll("#past button.expanded").forEach((x) => x.classList.remove("expanded"));
         if (wasOpen) return;
-        const r = await fetch(`/api/advisor/report?id=${b.dataset.id}`).then((x) => x.json());
+        const r = await calvinLoading.fetch(`/api/advisor/report?id=${b.dataset.id}`, undefined, "plan").then((x) => x.json());
         b.insertAdjacentHTML("afterend", `<div class="plan pastplan ${r.status !== "done" ? "error" : ""}">${r.report ? md(r.report) : esc(r.error ?? "")}</div>`);
         b.classList.add("expanded");
       }));
