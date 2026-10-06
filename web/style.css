@@ -242,6 +242,37 @@ svg text { fill: var(--muted); font: 500 11px "JetBrains Mono", monospace; }
 footer { max-width: 1452px; margin: 0 auto; padding: 14px 0 26px; border-top: 1px solid var(--line-dim); text-align: center; font-size: 12px; color: var(--muted); }
 .error { color: var(--orange-ink); }
 
+/* ---------- loading ---------- */
+.spinner {
+  display: inline-block; flex: none; width: 14px; height: 14px; border: 2px solid var(--line-dim);
+  border-top-color: var(--orange); border-radius: 50%; animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes fade-in { from { opacity: 0; } }
+.loading-msg { display: flex; align-items: center; gap: 10px; }
+/* Progress along the top of the page and a status chip, driven by /loading.js. */
+.loadbar { position: fixed; top: 0; left: 0; right: 0; z-index: 30; height: 3px; pointer-events: none; opacity: 0; transition: opacity 0.3s; }
+.loadbar.on { opacity: 1; }
+.loadbar i { display: block; width: 0; height: 100%; background: var(--orange); box-shadow: 0 0 8px var(--orange); transition: width 0.25s ease-out; }
+.loadchip {
+  position: fixed; right: 18px; bottom: 18px; z-index: 30; display: flex; align-items: center; gap: 10px;
+  padding: 8px 14px; border: 1.5px solid var(--line); border-radius: 999px; background: var(--surface);
+  color: var(--text); font: 500 12.5px "JetBrains Mono", monospace; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+  pointer-events: none; opacity: 0; transform: translateY(6px); transition: opacity 0.2s, transform 0.2s;
+}
+.loadchip.on { opacity: 1; transform: none; }
+/* A panel waiting for its data: dim what is there and spin in the corner. */
+.panel > * { transition: opacity 0.2s; }
+.panel.is-loading > :not(h2):not(.sub) { opacity: 0.35; transition-delay: 0.15s; }
+.panel.is-loading::after {
+  content: ""; position: absolute; top: 20px; right: 22px; width: 16px; height: 16px; border: 2px solid var(--line-dim);
+  border-top-color: var(--orange); border-radius: 50%; animation: spin 0.8s linear infinite, fade-in 0.2s 0.15s both;
+}
+.panel.is-loading:empty { min-height: 100px; }
+@media (prefers-reduced-motion: reduce) {
+  .spinner, .panel.is-loading::after { animation-duration: 2.4s; }
+}
+
 /* Effort mix chips in the Models panel. */
 .efforts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
 .effort-label { color: var(--faint); font-size: 12px; margin-right: 2px; }

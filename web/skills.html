@@ -6,6 +6,7 @@
   <title>calvin · Skills</title>
   <link rel="icon" type="image/svg+xml" href="/logo.svg" />
   <link rel="stylesheet" href="/style.css" />
+  <script src="/loading.js"></script>
   <script src="/update.js"></script>
   <style>
     .search {
@@ -112,7 +113,7 @@
     <section class="panel span-5">
       <h2>Installed skills</h2>
       <p class="sub">Tick skills to pack them into one zip for a colleague. Click a row for details.</p>
-      <div class="list" id="list"></div>
+      <div class="list" id="list"><div class="empty loading-msg"><span class="spinner"></span>Loading skills…</div></div>
     </section>
 
     <section class="panel span-7 detail" id="detail">
@@ -133,8 +134,8 @@
     const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
     const bytes = (n) => (n >= 1 << 20 ? (n / (1 << 20)).toFixed(1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " KB" : n + " B");
     const day = (ts) => (ts ? ts.slice(0, 10) : "never");
-    async function api(path) {
-      const r = await fetch(path);
+    async function api(path, label) {
+      const r = await calvinLoading.fetch(path, undefined, label);
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `${r.status}`);
       return r.json();
     }
@@ -174,7 +175,7 @@
     }
 
     async function getDetail(name) {
-      if (!details.has(name)) details.set(name, await api(`/api/skills/detail?name=${encodeURIComponent(name)}`));
+      if (!details.has(name)) details.set(name, await api(`/api/skills/detail?name=${encodeURIComponent(name)}`, `${name} details`));
       return details.get(name);
     }
 
@@ -183,6 +184,7 @@
       history.replaceState(null, "", `#${encodeURIComponent(name)}`);
       renderList();
       const box = $("#detail");
+      if (!details.has(name)) box.innerHTML = `<div class="empty loading-msg"><span class="spinner"></span>Loading ${esc(name)}…</div>`;
       try {
         const d = await getDetail(name);
         if (current !== name) return;
@@ -279,7 +281,7 @@
         const warnings = ds.flatMap((d) => d.plan.warnings.map((w) => `${d.skill.name}: ${w}`));
         if (warnings.length && !confirm(`These files might contain secrets:\n\n${warnings.join("\n")}\n\nPack them anyway?`)) return;
         const url = `/api/skills/pack?names=${encodeURIComponent(names.join(","))}`;
-        const r = await fetch(url);
+        const r = await calvinLoading.fetch(url, undefined, "skill package");
         if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `${r.status}`);
         const blob = await r.blob();
         const name = (r.headers.get("content-disposition") ?? "").match(/filename="([^"]+)"/)?.[1] ?? "skills.zip";
@@ -335,7 +337,7 @@
 
     (async () => {
       try {
-        skills = await api("/api/skills?since=all");
+        skills = await api("/api/skills?since=all", "skills");
         skills.sort((a, b) => b.model_runs + b.command_runs - (a.model_runs + a.command_runs) || a.name.localeCompare(b.name));
         renderList();
         const wanted = decodeURIComponent(location.hash.slice(1));

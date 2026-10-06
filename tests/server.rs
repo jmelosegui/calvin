@@ -95,6 +95,37 @@ async fn every_page_shows_the_update_banner() {
 }
 
 #[tokio::test]
+async fn every_page_shows_loading_progress() {
+    let (_tmp, app) = app();
+    let res = app
+        .clone()
+        .oneshot(get("/loading.js", "127.0.0.1:1982"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers()["content-type"].to_str().unwrap(),
+        "text/javascript; charset=utf-8"
+    );
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    assert!(String::from_utf8_lossy(&body).contains("window.calvinLoading"));
+
+    for page in ["/", "/opportunities", "/sessions", "/skills"] {
+        let res = app
+            .clone()
+            .oneshot(get(page, "127.0.0.1:1982"))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "{page}");
+        let body = res.into_body().collect().await.unwrap().to_bytes();
+        assert!(
+            String::from_utf8_lossy(&body).contains(r#"<script src="/loading.js"></script>"#),
+            "{page} doesn't load the loading indicator"
+        );
+    }
+}
+
+#[tokio::test]
 async fn shutdown_needs_the_token() {
     let (_tmp, app) = app();
     let post = |token: Option<&str>| {

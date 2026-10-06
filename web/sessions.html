@@ -6,6 +6,7 @@
   <title>calvin · Sessions</title>
   <link rel="icon" type="image/svg+xml" href="/logo.svg" />
   <link rel="stylesheet" href="/style.css" />
+  <script src="/loading.js"></script>
   <script src="/update.js"></script>
   <style>
     .search {
@@ -168,8 +169,8 @@
       return `${Math.floor(m / 60)}h ${m % 60}m`;
     }
     const span = (a, b) => (a && b ? new Date(b) - new Date(a) : null);
-    async function api(path) {
-      const r = await fetch(path);
+    async function api(path, label) {
+      const r = await calvinLoading.fetch(path, undefined, label);
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `${r.status}`);
       return r.json();
     }
@@ -214,7 +215,7 @@
             </div>
           </div>
         </div>
-        <main><section class="panel"><div id="list"><div class="empty">Loading…</div></div></section></main>`;
+        <main><section class="panel"><div id="list"><div class="empty loading-msg"><span class="spinner"></span>Loading sessions…</div></div></section></main>`;
       document.querySelectorAll("#range button").forEach((b) => {
         b.classList.toggle("active", b.dataset.r === range);
         b.onclick = () => { range = b.dataset.r; listView(); };
@@ -227,12 +228,16 @@
         renderList();
       };
       $("#onlyfriction").onchange = renderList;
-      api(`/api/sessions?since=${range}`).then((rows) => {
+      // Switching range or opening a session before this answers makes the response stale.
+      const view = $("#list");
+      const stale = () => view !== $("#list");
+      api(`/api/sessions?since=${range}`, "sessions").then((rows) => {
+        if (stale()) return;
         sessions = rows;
         const projects = [...new Set(rows.map((r) => r.project).filter(Boolean))].sort();
         $("#project").innerHTML += projects.map((p) => `<option>${esc(p)}</option>`).join("");
         renderList();
-      }).catch((e) => ($("#list").innerHTML = `<div class="empty error">${esc(e.message)}</div>`));
+      }).catch((e) => { if (!stale()) $("#list").innerHTML = `<div class="empty error">${esc(e.message)}</div>`; });
     }
 
     function renderList() {
@@ -379,14 +384,18 @@
     }
 
     async function detailView(id, focusFriction = false) {
-      $("#view").innerHTML = `<main><section class="panel"><div class="empty">Loading the conversation…</div></section></main>`;
+      $("#view").innerHTML = `<main><section class="panel"><div class="empty loading-msg"><span class="spinner"></span>Loading the conversation…</div></section></main>`;
+      const view = $("#view").firstElementChild;
       let s;
       try {
-        s = await api(`/api/sessions/detail?id=${encodeURIComponent(id)}`);
+        s = await api(`/api/sessions/detail?id=${encodeURIComponent(id)}`, "conversation");
       } catch (e) {
+        if (view !== $("#view").firstElementChild) return;
         $("#view").innerHTML = `<main><section class="panel"><a class="back" href="#">← All sessions</a><div class="empty error">${esc(e.message)}</div></section></main>`;
         return;
       }
+      // The user moved on (back to the list or another session) while this was loading.
+      if (view !== $("#view").firstElementChild) return;
       document.title = `calvin · ${s.title ?? "Session"}`;
       tools = [];
       const prompts = s.turns.filter((t) => t.prompt).length;
