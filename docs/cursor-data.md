@@ -59,6 +59,7 @@ The Opportunities page uses Cursor-only evidence for Cursor recommendations. It 
 - high-context sessions that did not use `/summarize` or `/compress`;
 - broad edits that did not run `/agent-review`;
 - projects without `AGENTS.md` or `.cursor/rules`;
+- turns where the same tool call failed the same way three or more times in a row;
 - adoption of rules, hooks, subagents, worktrees, skills, MCP/plugins, Ask and Debug modes,
   session controls, status indicators, sandboxing, headless automation and Cloud Agents.
 

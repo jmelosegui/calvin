@@ -18,6 +18,11 @@ loads them into a local SQLite database, and shows you:
   $0.01 each. Each tool's basis stays labelled, because none of them is your actual bill
 - **Friction**: denied tool calls, interruptions, "no, that's wrong" replies
 - **Opportunities**: Claude Code, Copilot CLI and Cursor features and habits you could be using and aren't
+- **Context overhead**: how much of every request goes to tool definitions, skills and
+  instructions, and MCP servers you configured but never call (or that fail to start)
+- **Failure loops**: turns where an agent repeated the same failing call three or more times
+- **Facts agents keep relearning**: missing commands, shell quirks and setup steps they
+  discover by failing in session after session, drafted as lines for your instruction files
 
 ![The calvin dashboard: headline numbers, spend per day, live activity, skill shelf and repeated prompts](assets/dashboard.png)
 

@@ -51,7 +51,7 @@ Legend: ✅ used · 🟡 partly · ❌ not yet · 🚫 deliberately ignored
 | `queue-operation` | Prompts queued while the agent was busy | ❌ |
 | `fork-context-ref`, `continued-in`, `relocated` | Session lineage: forks, continuations, moves | ❌ |
 | `file-history-snapshot`, `file-history-delta` | Checkpoints | 🚫 |
-| `attachment` | Context Claude Code injected: `plan_mode`, `skill_listing`, `invoked_skills`, `nested_memory`, `edited_text_file`, `total_tokens_reminder`, `ultra_effort_enter`, … | ❌ |
+| `attachment` | Context Claude Code injected: `plan_mode`, `skill_listing`, `invoked_skills`, `nested_memory`, `edited_text_file`, `total_tokens_reminder`, `ultra_effort_enter`, … | 🟡 sizes of `skill_listing`, `instructions`, `nested_memory`; tool and failed MCP server names from `deferred_tools_delta` |
 | `mode`, `last-prompt`, `atis-latch`, `cost-state`, `started`/`result`/`launched`/`failed` | UI and lifecycle state | 🚫 |
 
 ### Fields worth using
@@ -67,6 +67,7 @@ Legend: ✅ used · 🟡 partly · ❌ not yet · 🚫 deliberately ignored
 | `advisorModel` | `assistant` | Advisor model in use | ❌ |
 | `isApiErrorMessage`, `apiErrorStatus`, `error`, `isAbortedMidStream` | `assistant` | API errors and aborted responses | ❌ |
 | `toolDenialKind` | `user` | Why a tool call was stopped: `user-rejected`, `automode-blocked`, `permission-rule`, `automode-unavailable` | ❌ (inferred from text) |
+| `tool_result.is_error`, `content` | `user` | Which tool calls failed, and the error | ✅ first 300 characters, credentials redacted |
 | `userFeedback` | `user` | What you wrote when rejecting | 🟡 parsed from text |
 | `isCompactSummary` | `user` | The summary that replaced compacted context | ❌ |
 | `toolUseResult.structuredPatch`, `oldString`/`newString` | `user` | Lines added and removed per edit | ❌ |
