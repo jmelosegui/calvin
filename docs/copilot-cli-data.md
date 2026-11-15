@@ -26,6 +26,9 @@ Either source may be absent; ingestion continues with the data that is available
   or compared directly with Claude Code's estimated API cost.
 - Missing usage remains unavailable rather than becoming a zero-valued measurement.
 - Per-request usage is attached to session timeline turns by the session store's `turn_index`.
+- `session.usage_record` events supply the number of tools offered on each request
+  (`availableToolCount`) and the tokens their definitions took (`toolTokenCount`). Tool
+  execution events supply `mcpServerName`, so calls are counted per MCP server.
 - Tool results are truncated before storage and display. Calvin does not import tool-specific
   telemetry fields that may contain URLs, file contents, questions, answers or secrets.
 - Real transcripts are never used as test fixtures. Fixtures are handwritten and anonymous.
@@ -43,7 +46,10 @@ Code's estimated USD cost. Calvin includes two kinds of deterministic checks:
 - sessions changing five or more files without `/review`, `/security-review` or
   `/rubber-duck`;
 - bounded prompts repeated across multiple sessions that may suit `/autopilot` with an
-  explicit AI-credit limit.
+  explicit AI-credit limit;
+- tool definitions that take a large share of every request, and MCP servers that are
+  configured but never called;
+- turns where the same tool call failed the same way three or more times in a row.
 - a feature checklist covering hooks, status lines, command-history size, subagents and
   fleet mode, worktrees, notifications, keep-alive, memory, extensions, remote sessions
   and delegation, context and credit controls, prompt refinement and research, IDE/LSP

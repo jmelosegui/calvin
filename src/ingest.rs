@@ -904,13 +904,14 @@ pub fn write_event(tx: &Transaction, harness: &str, event: &Event) -> Result<()>
         Event::ToolCall(t) => {
             tx.prepare_cached(
                 "INSERT INTO tool_calls
-                 (id, session_id, request_id, ts, tool, skill, turn_index, input_json)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 (id, session_id, request_id, ts, tool, skill, turn_index, input_json, mcp_server)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                  ON CONFLICT(id) DO UPDATE SET
                      request_id = COALESCE(tool_calls.request_id, excluded.request_id),
                      ts = excluded.ts,
                      turn_index = COALESCE(tool_calls.turn_index, excluded.turn_index),
-                     input_json = COALESCE(tool_calls.input_json, excluded.input_json)",
+                     input_json = COALESCE(tool_calls.input_json, excluded.input_json),
+                     mcp_server = COALESCE(tool_calls.mcp_server, excluded.mcp_server)",
             )?
             .execute(params![
                 t.id,
@@ -920,7 +921,8 @@ pub fn write_event(tx: &Transaction, harness: &str, event: &Event) -> Result<()>
                 t.tool,
                 t.skill,
                 t.turn_index,
-                t.input_json
+                t.input_json,
+                t.mcp_server
             ])?;
         }
         Event::ToolResult(r) => {
@@ -985,7 +987,104 @@ pub fn write_event(tx: &Transaction, harness: &str, event: &Event) -> Result<()>
             )?
             .execute(params![id, session_id, ts, mode])?;
         }
+        Event::ContextSample(c) => {
+            tx.prepare_cached(
+                "INSERT INTO context_samples
+                 (id, session_id, ts, tool_count, tool_tokens, prompt_tokens, is_sidechain)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 ON CONFLICT(id) DO UPDATE SET
+                     tool_count = COALESCE(excluded.tool_count, context_samples.tool_count),
+                     tool_tokens = COALESCE(excluded.tool_tokens, context_samples.tool_tokens),
+                     prompt_tokens = COALESCE(excluded.prompt_tokens, context_samples.prompt_tokens)",
+            )?
+            .execute(params![
+                c.id,
+                c.session_id,
+                c.ts,
+                c.tool_count,
+                c.tool_tokens,
+                c.prompt_tokens,
+                c.is_sidechain
+            ])?;
+        }
+        Event::ContextItem(c) => {
+            tx.prepare_cached(
+                "INSERT INTO context_items (session_id, kind, name, first_seen, chars)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(session_id, kind, name) DO UPDATE SET
+                     first_seen = MIN(context_items.first_seen, excluded.first_seen),
+                     chars = MAX(COALESCE(context_items.chars, excluded.chars),
+                                 COALESCE(excluded.chars, context_items.chars))",
+            )?
+            .execute(params![
+                c.session_id,
+                c.kind.as_str(),
+                c.name,
+                c.ts,
+                c.chars
+            ])?;
+        }
     }
+    Ok(())
+}
+
+/// Replay the stored raw lines of Claude Code and Copilot CLI once, so calls, failures and
+/// context recorded before v8 gain MCP servers, error previews and context sizes.
+pub fn backfill_context(conn: &Connection) -> Result<()> {
+    let files: Vec<(String, String)> = conn
+        .prepare(
+            "SELECT DISTINCT c.file, f.harness FROM raw_chunks c JOIN files f ON f.path = c.file
+             WHERE f.harness IN (?1, ?2)",
+        )?
+        .query_map(params![claude_code::HARNESS, copilot_cli::HARNESS], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?
+        .collect::<Result<_, _>>()?;
+    if files.is_empty() {
+        return Ok(());
+    }
+    eprintln!(
+        "calvin: reading tool and context details from {} earlier log files (one time)…",
+        files.len()
+    );
+    let tx = conn.unchecked_transaction()?;
+    {
+        let mut chunks =
+            tx.prepare("SELECT zdata FROM raw_chunks WHERE file = ?1 ORDER BY start_offset")?;
+        for (file, harness) in &files {
+            let native_session_id = Path::new(file)
+                .parent()
+                .and_then(Path::file_name)
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let mut rows = chunks.query([file])?;
+            while let Some(r) = rows.next()? {
+                let raw = zstd::decode_all(&r.get::<_, Vec<u8>>(0)?[..])?;
+                for line in raw.split(|&b| b == b'\n') {
+                    let Ok(value) = serde_json::from_slice::<Value>(line) else {
+                        continue;
+                    };
+                    let events = if harness == claude_code::HARNESS {
+                        claude_code::parse_record(&value)
+                    } else {
+                        copilot_cli::parse_record(&value, &native_session_id)
+                    };
+                    for event in events.iter().filter(|e| {
+                        matches!(
+                            e,
+                            Event::ToolCall(_)
+                                | Event::ToolResult(_)
+                                | Event::ContextSample(_)
+                                | Event::ContextItem(_)
+                        )
+                    }) {
+                        write_event(&tx, harness, event)?;
+                    }
+                }
+            }
+        }
+    }
+    tx.commit()?;
     Ok(())
 }
 

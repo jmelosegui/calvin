@@ -63,6 +63,11 @@ pub fn parse_record(v: &Value, native_session_id: &str) -> Vec<Event> {
                     .and_then(Value::as_str)
                     .map(namespaced),
                 ts,
+                mcp_server: data
+                    .get("mcpServerName")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
                 tool: tool.to_string(),
                 skill: skill_name(tool, data.get("arguments")),
                 turn_index: data.get("turnIndex").and_then(Value::as_i64),
@@ -110,6 +115,35 @@ pub fn parse_record(v: &Value, native_session_id: &str) -> Vec<Event> {
                 kind: PromptKind::Command,
                 text: text.to_string(),
                 is_sidechain: false,
+            })]
+        }
+        "session.usage_record" => {
+            let Some(usage) = data.get("usage") else {
+                return Vec::new();
+            };
+            let int = |key: &str| usage.get(key).and_then(Value::as_i64);
+            let (tool_count, tool_tokens) = (int("availableToolCount"), int("toolTokenCount"));
+            if tool_count.is_none() && tool_tokens.is_none() {
+                return Vec::new();
+            }
+            let Some(id) = usage
+                .get("apiCallId")
+                .or_else(|| v.get("id"))
+                .and_then(Value::as_str)
+            else {
+                return Vec::new();
+            };
+            vec![Event::ContextSample(ContextSample {
+                id: format!("{}:context:{id}", namespaced(native_session_id)),
+                session_id: namespaced(native_session_id),
+                ts,
+                tool_count,
+                tool_tokens,
+                prompt_tokens: int("inputTokens"),
+                is_sidechain: usage
+                    .get("parentToolCallId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|p| !p.is_empty()),
             })]
         }
         "session.mode_changed" => {

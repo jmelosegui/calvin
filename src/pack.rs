@@ -239,32 +239,7 @@ fn looks_sensitive(path: &Path, bytes: u64) -> Option<String> {
         return None;
     }
     let text = String::from_utf8(std::fs::read(path).ok()?).ok()?;
-    let markers: &[(&str, &str)] = &[
-        ("PRIVATE KEY-----", "contains a private key"),
-        ("AKIA", "may contain an AWS access key"),
-        ("ghp_", "may contain a GitHub token"),
-        ("github_pat_", "may contain a GitHub token"),
-        ("sk-ant-", "may contain an Anthropic API key"),
-        ("xoxb-", "may contain a Slack token"),
-        ("xoxp-", "may contain a Slack token"),
-        ("AccountKey=", "may contain an Azure storage key"),
-        ("SharedAccessSignature=", "may contain an Azure SAS token"),
-        ("Password=", "may contain a connection-string password"),
-    ];
-    markers
-        .iter()
-        .find(|(m, _)| {
-            text.match_indices(m).any(|(i, _)| {
-                // Require something after the marker, so docs that merely mention it pass.
-                let rest = &text[i + m.len()..];
-                rest.chars()
-                    .take(12)
-                    .filter(|c| c.is_ascii_alphanumeric())
-                    .count()
-                    >= 8
-            })
-        })
-        .map(|(_, why)| why.to_string())
+    crate::secrets::find(&text).map(str::to_string)
 }
 
 fn folder_name(dir: &Path, skill: &str) -> String {
