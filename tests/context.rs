@@ -433,3 +433,151 @@ fn copilot_with_tool_search_and_few_tools_is_good() {
     // Too few sessions to call a server unused.
     assert!(find(&items, "copilot-mcp-unused").is_none());
 }
+
+/// One assistant response that makes several tool calls at once.
+fn claude_parallel(session: &str, ts: &str, request: &str, calls: &[(&str, &str, Value)]) -> Value {
+    let content: Vec<Value> = calls
+        .iter()
+        .map(
+            |(id, name, input)| json!({"type": "tool_use", "id": id, "name": name, "input": input}),
+        )
+        .collect();
+    claude(
+        session,
+        ts,
+        "assistant",
+        json!({
+            "requestId": request,
+            "message": {
+                "model": "claude-opus-5", "role": "assistant", "content": content,
+                "usage": {"input_tokens": 10, "output_tokens": 50,
+                          "cache_read_input_tokens": 20000, "cache_creation_input_tokens": 0}
+            }
+        }),
+    )
+}
+
+#[test]
+fn failure_loops_count_repeated_errors_not_progress_or_parallel_calls() {
+    let s = CLAUDE_SESSION;
+    let build = json!({"command": "cd C:\\work\\demo && cargo build"});
+    let test = json!({"command": "cargo test"});
+    let mut lines = vec![claude_prompt(s, "2026-09-01T10:00:00.000Z", "build it")];
+    // The same build fails the same way three times, on three separate requests.
+    for (n, line) in ["12", "34", "56"].iter().enumerate() {
+        let id = format!("loop-{n}");
+        lines.push(claude_tool(
+            s,
+            &format!("2026-09-01T10:00:0{}.000Z", n * 2 + 1),
+            &id,
+            "Bash",
+            build.clone(),
+        ));
+        lines.push(claude_result(
+            s,
+            &format!("2026-09-01T10:00:0{}.500Z", n * 2 + 1),
+            &id,
+            true,
+            &format!(
+                "Exit code 101\nerror: linker `link.exe` not found at C:\\tools\\bin line {line}"
+            ),
+        ));
+    }
+    // A red-green cycle: the error changes every time, which is progress.
+    lines.push(claude_prompt(
+        s,
+        "2026-09-01T10:01:00.000Z",
+        "now the tests",
+    ));
+    for (n, name) in ["parse", "render", "save"].iter().enumerate() {
+        let id = format!("red-{n}");
+        lines.push(claude_tool(
+            s,
+            &format!("2026-09-01T10:01:0{}.000Z", n * 2 + 1),
+            &id,
+            "Bash",
+            test.clone(),
+        ));
+        lines.push(claude_result(
+            s,
+            &format!("2026-09-01T10:01:0{}.500Z", n * 2 + 1),
+            &id,
+            true,
+            &format!("Exit code 101\ntest {name} failed"),
+        ));
+    }
+    // A retry that works, then one more failure: never three in a row.
+    lines.push(claude_prompt(s, "2026-09-01T10:02:00.000Z", "fix the docs"));
+    for (n, ok) in [false, false, true, false].iter().enumerate() {
+        let id = format!("edit-{n}");
+        lines.push(claude_tool(
+            s,
+            &format!("2026-09-01T10:02:0{}.000Z", n * 2 + 1),
+            &id,
+            "Edit",
+            json!({"file_path": "README.md"}),
+        ));
+        let text = if *ok {
+            "ok"
+        } else {
+            "<tool_use_error>File has not been read yet.</tool_use_error>"
+        };
+        lines.push(claude_result(
+            s,
+            &format!("2026-09-01T10:02:0{}.500Z", n * 2 + 1),
+            &id,
+            !ok,
+            text,
+        ));
+    }
+    // Three calls from one response failing alike are one attempt, not a loop.
+    lines.push(claude_prompt(
+        s,
+        "2026-09-01T10:03:00.000Z",
+        "write the files",
+    ));
+    let write = json!({"file_path": "out.txt"});
+    lines.push(claude_parallel(
+        s,
+        "2026-09-01T10:03:01.000Z",
+        "req-parallel",
+        &[
+            ("par-0", "Write", write.clone()),
+            ("par-1", "Write", write.clone()),
+            ("par-2", "Write", write),
+        ],
+    ));
+    for n in 0..3 {
+        lines.push(claude_result(
+            s,
+            &format!("2026-09-01T10:03:02.{n}00Z"),
+            &format!("par-{n}"),
+            true,
+            "<tool_use_error>Parent directory does not exist</tool_use_error>",
+        ));
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let claude_dir = claude_log(tmp.path(), s, &lines);
+    let mut conn = db::open_in_memory().unwrap();
+    ingest_claude_code(&mut conn, &claude_dir, &PriceTable::bundled(), &mut Quiet).unwrap();
+    let items = run_opportunities(&conn, tmp.path(), &claude_dir, &tmp.path().join("copilot"));
+
+    let loops = find(&items, "failure-loops").expect("failure loops");
+    assert_eq!(loops.status, Status::Consider);
+    assert!(
+        loops.finding.starts_with("1 time a turn"),
+        "{}",
+        loops.finding
+    );
+    assert!(loops.finding.contains("2 requests"), "{}", loops.finding);
+    let labels: Vec<_> = loops.evidence.iter().map(|e| e.label.as_str()).collect();
+    assert_eq!(labels, ["Bash(cargo build) failed 3× in a row"]);
+    let detail = loops.evidence[0].detail.as_deref().unwrap();
+    assert!(
+        detail.contains("error: linker `link.exe` not found"),
+        "{detail}"
+    );
+    let link = loops.evidence[0].link.as_deref().unwrap();
+    assert!(link.starts_with("/sessions#") && link.contains(s), "{link}");
+}

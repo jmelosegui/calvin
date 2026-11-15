@@ -18,6 +18,7 @@ use crate::prices::PriceTable;
 use crate::skills::InstalledSkill;
 
 mod context;
+mod loops;
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -105,6 +106,7 @@ pub fn run(conn: &Connection, since: &Since, ctx: &Context) -> Result<Vec<Opport
         context::copilot_context_budget(conn, since, ctx.copilot_dir)?,
         context::copilot_mcp_unused(conn, since, ctx.copilot_dir)?,
     ];
+    out.extend(loops::failure_loops(conn, since)?);
     out.extend(copilot_feature_catalog(conn, since, ctx.copilot_dir)?);
     out.extend(cursor_feature_catalog(
         conn,
