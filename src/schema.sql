@@ -89,9 +89,33 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     input_json TEXT,
     outcome    TEXT,
     duration_ms INTEGER,
-    result_detail TEXT
+    result_detail TEXT,
+    mcp_server TEXT
 );
 CREATE INDEX IF NOT EXISTS tool_calls_ts ON tool_calls (ts);
+
+-- What a model request carried besides the conversation, when the harness reports it.
+CREATE TABLE IF NOT EXISTS context_samples (
+    id            TEXT PRIMARY KEY,
+    session_id    TEXT NOT NULL,
+    ts            TEXT NOT NULL,
+    tool_count    INTEGER,
+    tool_tokens   INTEGER,
+    prompt_tokens INTEGER,
+    is_sidechain  INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS context_samples_session ON context_samples (session_id);
+
+-- What a harness loaded into a session: names and sizes, never content.
+-- kind: 'tool', 'mcp_failed', 'skill_listing' or 'instructions'.
+CREATE TABLE IF NOT EXISTS context_items (
+    session_id TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    first_seen TEXT NOT NULL,
+    chars      INTEGER,
+    PRIMARY KEY (session_id, kind, name)
+);
 
 -- Moments the user stopped or overruled the agent.
 -- kind: 'rejected' (user said no to a tool), 'denied' (permission rule or classifier),

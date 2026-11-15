@@ -262,6 +262,7 @@ fn tool_events(
         skill: None,
         turn_index: Some(turn_index),
         input_json: serde_json::to_string(&input).unwrap_or_else(|_| "null".to_string()),
+        mcp_server: None,
     }));
 
     if edits_files(name) {

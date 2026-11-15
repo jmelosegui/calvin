@@ -14,6 +14,7 @@ pub mod opportunities;
 pub mod pack;
 pub mod prices;
 pub mod report;
+pub mod secrets;
 pub mod server;
 pub mod skills;
 pub mod timeline;

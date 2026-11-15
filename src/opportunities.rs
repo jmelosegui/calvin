@@ -17,6 +17,8 @@ use crate::insights::{self, Since};
 use crate::prices::PriceTable;
 use crate::skills::InstalledSkill;
 
+mod context;
+
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
@@ -100,6 +102,8 @@ pub fn run(conn: &Connection, since: &Since, ctx: &Context) -> Result<Vec<Opport
         cursor_plan_mode(conn, since)?,
         cursor_compact(conn, since)?,
         cursor_review(conn, since)?,
+        context::copilot_context_budget(conn, since, ctx.copilot_dir)?,
+        context::copilot_mcp_unused(conn, since, ctx.copilot_dir)?,
     ];
     out.extend(copilot_feature_catalog(conn, since, ctx.copilot_dir)?);
     out.extend(cursor_feature_catalog(
@@ -130,6 +134,8 @@ pub fn run(conn: &Connection, since: &Since, ctx: &Context) -> Result<Vec<Opport
             custom_agents(conn, since, ctx.claude_dir, &projects)?,
             effort(conn, since, &settings)?,
             mcp_servers(conn, since, &user_config, &projects)?,
+            context::claude_mcp_failing(conn, since)?,
+            context::claude_context_budget(conn, since, ctx.prices)?,
             unused_skills(conn, since, ctx.skills)?,
             skills_model_skips(conn, since, ctx.skills)?,
             repeated_prompts(conn, since)?,
@@ -1837,7 +1843,10 @@ fn mcp_servers(
     let mut configured: BTreeMap<String, String> = BTreeMap::new();
     if let Some(servers) = user_config.get("mcpServers").and_then(Value::as_object) {
         for name in servers.keys() {
-            configured.insert(name.clone(), "all projects (~/.claude.json)".into());
+            configured.insert(
+                name.clone(),
+                "configured for all projects (~/.claude.json)".into(),
+            );
         }
     }
     let roots: HashSet<String> = projects
@@ -1855,7 +1864,7 @@ fn mcp_servers(
                 for name in servers.keys() {
                     configured
                         .entry(name.clone())
-                        .or_insert_with(|| format!("project {path}"));
+                        .or_insert_with(|| format!("configured for project {path}"));
                 }
             }
         }
@@ -1868,8 +1877,17 @@ fn mcp_servers(
             for name in servers.keys() {
                 configured
                     .entry(name.clone())
-                    .or_insert_with(|| format!("{}/.mcp.json", p.name));
+                    .or_insert_with(|| format!("configured in {}/.mcp.json", p.name));
             }
+        }
+    }
+    // Servers from plugins and connectors aren't in any of those files, but the logs show
+    // them loading.
+    for (name, sessions) in context::claude_loaded_mcp_servers(conn, since)? {
+        if sessions >= context::IDLE_SESSIONS {
+            configured
+                .entry(name)
+                .or_insert_with(|| format!("loaded in {sessions} sessions"));
         }
     }
     if configured.is_empty() {
@@ -1911,7 +1929,7 @@ fn mcp_servers(
         saving_usd: None,
         evidence: unused
             .iter()
-            .map(|(name, scope)| Evidence { label: (*name).clone(), detail: Some(format!("configured for {scope}")), link: None })
+            .map(|(name, scope)| Evidence { label: (*name).clone(), detail: Some((*scope).clone()), link: None })
             .collect(),
     })
 }

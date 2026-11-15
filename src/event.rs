@@ -28,6 +28,8 @@ pub enum Event {
         ts: String,
         mode: String,
     },
+    ContextSample(ContextSample),
+    ContextItem(ContextItem),
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -109,6 +111,8 @@ pub struct ToolCall {
     pub skill: Option<String>,
     pub turn_index: Option<i64>,
     pub input_json: String,
+    /// The MCP server the tool belongs to, when it is an MCP tool.
+    pub mcp_server: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,6 +142,56 @@ pub struct ToolResult {
     pub outcome: Outcome,
     /// First part of the result text, kept for rejected/denied results.
     pub detail: Option<String>,
+}
+
+/// What one model request carried besides the conversation, when the harness reports it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContextSample {
+    pub id: String,
+    pub session_id: String,
+    pub ts: String,
+    /// Tools whose definitions were sent with the request.
+    pub tool_count: Option<i64>,
+    /// Tokens those tool definitions took.
+    pub tool_tokens: Option<i64>,
+    /// Every prompt token of the request, cached or not.
+    pub prompt_tokens: Option<i64>,
+    pub is_sidechain: bool,
+}
+
+/// Something a harness loaded into a session's context. Only names and sizes are kept,
+/// never the content.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContextItem {
+    pub session_id: String,
+    pub ts: String,
+    pub kind: ContextKind,
+    pub name: String,
+    /// Size in characters, when the harness records the text.
+    pub chars: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextKind {
+    /// A tool offered to the model.
+    Tool,
+    /// An MCP server that failed to start.
+    McpFailed,
+    /// The list of skills the model can choose from.
+    SkillListing,
+    /// An instruction or memory file.
+    Instructions,
+}
+
+impl ContextKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ContextKind::Tool => "tool",
+            ContextKind::McpFailed => "mcp_failed",
+            ContextKind::SkillListing => "skill_listing",
+            ContextKind::Instructions => "instructions",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

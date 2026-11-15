@@ -14,7 +14,9 @@ const SCHEMA: &str = include_str!("schema.sql");
 /// - 5: Copilot CLI usage fields (`ai_units`, `duration_ms`).
 /// - 6: Copilot turn linkage, session modes and tool result telemetry.
 /// - 7: provider-neutral assistant messages for normalized Cursor timelines.
-pub const SCHEMA_VERSION: i64 = 7;
+/// - 8: context overhead (`context_samples`, `context_items`), `tool_calls.mcp_server` and
+///   redacted Claude Code error previews, backfilled from the raw lines.
+pub const SCHEMA_VERSION: i64 = 8;
 
 /// Lines per compressed block when migrating old rows.
 const MIGRATION_CHUNK_BYTES: usize = 4 * 1024 * 1024;
@@ -73,6 +75,9 @@ fn init(conn: &Connection) -> Result<()> {
              ALTER TABLE tool_calls ADD COLUMN result_detail TEXT;",
         )?;
     }
+    if table_exists(conn, "tool_calls")? && !column_exists(conn, "tool_calls", "mcp_server")? {
+        conn.execute_batch("ALTER TABLE tool_calls ADD COLUMN mcp_server TEXT")?;
+    }
     conn.execute_batch(SCHEMA)?;
     if table_exists(conn, "raw_lines")? {
         migrate_raw_lines(conn).context("migrating raw log lines to the compressed layout")?;
@@ -93,6 +98,10 @@ fn init(conn: &Connection) -> Result<()> {
             "UPDATE files SET offset = 0 WHERE harness = 'copilot-cli'",
             [],
         )?;
+    }
+    if version < 8 && table_exists(conn, "raw_chunks")? {
+        crate::ingest::backfill_context(conn)
+            .context("backfilling tool and context details from raw lines")?;
     }
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())

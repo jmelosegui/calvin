@@ -50,6 +50,11 @@ pub fn parse_record(v: &Value) -> Vec<Event> {
                 out.push(Event::Title { session_id, title });
             }
         }
+        "attachment" => {
+            if let (Some(ts), Some(attachment)) = (ts, v.get("attachment")) {
+                parse_attachment(attachment, &session_id, &ts, &mut out);
+            }
+        }
         "assistant" => {
             if let Some(ts) = ts {
                 parse_assistant(v, session_id, ts, is_sidechain, &mut out);
@@ -113,11 +118,90 @@ fn parse_assistant(
             session_id: session_id.clone(),
             request_id: request_id.clone(),
             ts: ts.clone(),
+            mcp_server: mcp_server(&tool),
             tool,
             skill,
             turn_index: None,
             input_json: input.to_string(),
         }));
+    }
+}
+
+/// `mcp__<server>__<tool>` → `<server>`.
+pub fn mcp_server(tool: &str) -> Option<String> {
+    tool.strip_prefix("mcp__")?
+        .split("__")
+        .next()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Context Claude Code injected into the session: the tools it offered, MCP servers that
+/// failed to start, the skill listing and instruction files. Sizes only, never content.
+fn parse_attachment(a: &Value, session_id: &str, ts: &str, out: &mut Vec<Event>) {
+    let item = |kind, name: String, chars: Option<i64>| {
+        Event::ContextItem(ContextItem {
+            session_id: session_id.to_string(),
+            ts: ts.to_string(),
+            kind,
+            name,
+            chars,
+        })
+    };
+    let names = |key: &str| -> Vec<String> {
+        a.get(key)
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|i| i.as_str().map(str::to_string).or_else(|| str_at(i, "name")))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let chars = |v: Option<&Value>| v.and_then(Value::as_str).map(|s| s.chars().count() as i64);
+    match str_at(a, "type").as_deref() {
+        Some("deferred_tools_delta") => {
+            for name in names("addedNames") {
+                out.push(item(ContextKind::Tool, name, None));
+            }
+            for name in names("failedMcpServers") {
+                out.push(item(ContextKind::McpFailed, name, None));
+            }
+        }
+        Some("skill_listing") => {
+            out.push(item(
+                ContextKind::SkillListing,
+                "skills".into(),
+                chars(a.get("content")),
+            ));
+        }
+        Some("instructions") => {
+            for file in a
+                .get("files")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if let Some(path) = str_at(file, "path") {
+                    out.push(item(
+                        ContextKind::Instructions,
+                        path,
+                        chars(file.get("content")),
+                    ));
+                }
+            }
+        }
+        Some("nested_memory") => {
+            if let Some(path) = str_at(a, "path") {
+                let content = a.get("content");
+                let text = content
+                    .and_then(|c| c.get("content"))
+                    .or(content.filter(|c| c.is_string()));
+                out.push(item(ContextKind::Instructions, path, chars(text)));
+            }
+        }
+        _ => {}
     }
 }
 
@@ -170,8 +254,14 @@ fn parse_user(v: &Value, session_id: String, ts: String, is_sidechain: bool, out
         } else {
             Outcome::Ok
         };
-        let detail =
-            matches!(outcome, Outcome::Rejected | Outcome::Denied).then(|| truncate(&text, 300));
+        let detail = match outcome {
+            Outcome::Rejected | Outcome::Denied => Some(truncate(&text, 300)),
+            // Failures keep a short, redacted preview so repeated errors can be recognised.
+            Outcome::Error => {
+                Some(truncate(&crate::secrets::redact(&text), 300)).filter(|t| !t.is_empty())
+            }
+            Outcome::Ok => None,
+        };
         out.push(Event::ToolResult(ToolResult {
             tool_use_id,
             session_id: session_id.clone(),
