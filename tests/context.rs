@@ -581,3 +581,75 @@ fn failure_loops_count_repeated_errors_not_progress_or_parallel_calls() {
     let link = loops.evidence[0].link.as_deref().unwrap();
     assert!(link.starts_with("/sessions#") && link.contains(s), "{link}");
 }
+
+/// Three Claude sessions where `python` is missing and `py` works.
+fn python_sessions(root: &Path) -> PathBuf {
+    let claude = root.join("claude");
+    for n in 0..3 {
+        let s = session_id(n);
+        let at = |sec: u32| format!("2026-09-0{}T10:00:{sec:02}.000Z", n + 1);
+        let lines = vec![
+            claude_prompt(&s, &at(0), "check the version"),
+            claude_tool(
+                &s,
+                &at(1),
+                &format!("py-{n}-a"),
+                "Bash",
+                json!({"command": "python -c \"import sys; print(sys.version)\""}),
+            ),
+            claude_result(
+                &s,
+                &at(2),
+                &format!("py-{n}-a"),
+                true,
+                "Exit code 9009\nPython was not found; run without arguments to install from the Microsoft Store",
+            ),
+            claude_tool(
+                &s,
+                &at(3),
+                &format!("py-{n}-b"),
+                "Bash",
+                json!({"command": "py -c \"import sys; print(sys.version)\""}),
+            ),
+            claude_result(&s, &at(4), &format!("py-{n}-b"), false, "3.13.0"),
+        ];
+        claude_log(root, &s, &lines);
+    }
+    claude
+}
+
+#[test]
+fn facts_agents_relearn_are_drafted_until_written_down() {
+    let tmp = tempfile::tempdir().unwrap();
+    let claude_dir = python_sessions(tmp.path());
+    let mut conn = db::open_in_memory().unwrap();
+    ingest_claude_code(&mut conn, &claude_dir, &PriceTable::bundled(), &mut Quiet).unwrap();
+    let copilot_dir = tmp.path().join("copilot");
+
+    let items = run_opportunities(&conn, tmp.path(), &claude_dir, &copilot_dir);
+    let facts = find(&items, "repo-facts").expect("repo facts");
+    assert_eq!(facts.status, Status::Action);
+    let line = "Use `py` instead of `python`; `python` is not available here.";
+    let snippet = facts.snippet.as_deref().unwrap();
+    assert!(snippet.contains(&format!("- {line}")), "{snippet}");
+    assert!(snippet.contains("CLAUDE.md"), "{snippet}");
+    assert_eq!(facts.evidence[0].label, line);
+    let detail = facts.evidence[0].detail.as_deref().unwrap();
+    assert!(detail.contains("3 sessions"), "{detail}");
+
+    // A `copy` of a word isn't `py`; naming both programs is.
+    fs::write(
+        claude_dir.join("CLAUDE.md"),
+        "Make a copy of python files first.",
+    )
+    .unwrap();
+    let items = run_opportunities(&conn, tmp.path(), &claude_dir, &copilot_dir);
+    assert_eq!(find(&items, "repo-facts").unwrap().status, Status::Action);
+    fs::write(
+        claude_dir.join("CLAUDE.md"),
+        "Run Python scripts with `py`.",
+    )
+    .unwrap();
+    let items = run_opportunities(&conn, tmp.path(), &claude_dir, &copilot_dir);
+    assert_eq!(find(&items, "repo-facts").unwrap().status, Status::Good);
+}
